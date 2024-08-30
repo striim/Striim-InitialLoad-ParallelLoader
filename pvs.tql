@@ -1,0 +1,7 @@
+use admin;
+create or replace propertyvariable SourceConnectionString="jdbc:oracle:thin:@localhost:1521:ORCL";
+create or replace propertyvariable SourceUsername="miner";
+create or replace propertyvariable SourcePassword="miner";
+create or replace propertyvariable TargetConnectionString="jdbc:oracle:thin:@localhost:1521:ORCL";
+create or replace propertyvariable TargetUsername="qatest2";
+create or replace propertyvariable TargetPassword="qatest2";

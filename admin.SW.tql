@@ -1,0 +1,37 @@
+
+CREATE OR REPLACE APPLICATION OracleInitialLoadApp;
+
+CREATE OR REPLACE SOURCE OracleInitialLoad USING Global.DatabaseReader (
+  UUID: '{uuidstring=01eee6dc-94f3-4ab1-aefe-b6744dfe483d}',
+  FetchSize: 100,
+  QuiesceOnILCompletion: true,
+  Tables: '',
+  adapterName: 'DatabaseReader',
+  Password: '$admin.SourcePassword',
+  Query: "~QUERYTEXT~",
+  DatabaseProviderType: 'Oracle',
+  Password_encrypted: 'true',
+  Username: '$admin.SourceUsername',
+  ConnectionURL: '$admin.SourceConnectionString' )
+OUTPUT TO OracleIL_Output;
+
+CREATE OR REPLACE TARGET OracleIL_Target USING Global.DatabaseWriter (
+  ConnectionURL: '$admin.TargetConnectionString',
+  ConnectionRetryPolicy: 'retryInterval=30, maxRetries=3',
+  Tables: 'QUERY,~TARGETTABLE~',
+  DatabaseProviderType: 'Oracle',
+  CheckPointTable: 'CHKPOINT',
+  Password_encrypted: 'true',
+  CDDLAction: 'Process',
+  BatchPolicy: 'EventCount:100,Interval:10',
+  IgnorableExceptionCode: 'DUPLICATE_ROW_EXISTS',
+  StatementCacheSize: '50',
+  CommitPolicy: 'EventCount:100,Interval:10',
+  Username: '$admin.TargetUsername',
+  PreserveSourceTransactionBoundary: 'false',
+  Password: '$admin.TargetPassword',
+  adapterName: 'DatabaseWriter' )
+INPUT FROM OracleIL_Output;
+
+END APPLICATION OracleInitialLoadApp;
+
