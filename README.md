@@ -12,6 +12,8 @@ This Python program utilizes the Striim API to orchestrate the creation, deploym
 ## TQL Template File
 
 The TQL template file should utilize Property Variables (for connection string, username, and password), and the following placeholder variables:
+- **```Query: "~QUERYTEXT~"```**: This portion must exist in your TQL Sample App, on your **Source Reader**.
+- **```Query: "Tables: 'QUERY,~TARGETTABLE~'"```**: This portion must exist in your TQL Sample App, on your **Target Writer**.
 
 ## BigQuery Table
 
