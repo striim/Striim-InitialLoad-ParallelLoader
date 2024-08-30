@@ -45,16 +45,15 @@ CREATE TABLE `striimfieldproject.Daniel.striim_orchestration` (
 - **appname**: STRING. Keeps track of the full app name created.
 - **targettbl**: STRING. The target table (full schema.tablename) that the query results will write to. Include ColumnMap or KeyColumns if needed.
 - **status**: STRING. Keeps track of the status.
-
-### Possible statuses:
-
-- `<blank>` → Not yet started to process yet
-- `RUNNING` → Has been created, deployed, and started
-- `COMPLETED` → Has been detected as completed successfully.
-
 - **namespace**: STRING. Keeps track of the Namespace used in deployment.
 - **started_datetime**: TIMESTAMP. Tracks when the app was confirmed started (may not be exact).
 - **finished_datetime**: TIMESTAMP. Tracks when the app was confirmed completed (may not be exact).
 - **notes**: STRING. Any additional notes related to the output.
 - **iscurrentrow**: BOOL. Indicates if this is the current row.
 
+### Possible statuses from 'status' above:
+
+- `<blank>` → Not yet started to process yet
+- `RUNNING` → Has been created, deployed, and started
+- `COMPLETED` → Has been detected as completed successfully.
+- `FAILED` → Has been detected as failed, and added any failure messages to notes.
