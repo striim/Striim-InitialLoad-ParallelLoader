@@ -2,6 +2,8 @@
 
 This Python program utilizes the Striim API to orchestrate the creation, deployment, starting, reviewing status, undeploying, and dropping of Striim Applications. It helps parallelize and automate the load by splitting data into pieces, such as utilizing reading huge Oracle tables, computing read ranges for parallel reading, or splitting based on primary key values or date ranges. The resulting output is a set of queries.
 
+This app currently utilizes a BQ table as both a historical record and a place to orchestrate progress.
+
 ## Required Files
 
 - `<template>.tql`
