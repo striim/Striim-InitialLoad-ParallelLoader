@@ -11,6 +11,16 @@ This app currently utilizes a BQ table as both a historical record and a place t
 - `main.py`
 - `queryfile.txt`
 
+## queryfile.txt
+
+This file is simply a two-column file, containing the query to run and the target table name. The delimeter is definied in config.py and is pipe (|) by default. Here is an example:
+```
+SELECT * FROM QATEST.WF_PENDING_ACTIVITY WHERE ID < 1000|QATEST2.WF_PENDING_ACTIVITY
+SELECT * FROM QATEST.WF_PENDING_ACTIVITY WHERE ID BETWEEN 1000 AND 2000|QATEST2.WF_PENDING_ACTIVITY
+SELECT * FROM QATEST.WF_PENDING_ACTIVITY WHERE ID BETWEEN 2001 AND 3000|QATEST2.WF_PENDING_ACTIVITY
+SELECT * FROM QATEST.WF_PENDING_ACTIVITY WHERE ID > 3000 AND 2000|QATEST2.WF_PENDING_ACTIVITY
+```
+
 ## TQL Template File
 
 The TQL template file should utilize Property Variables (for connection string, username, and password), and the following placeholder variables:
