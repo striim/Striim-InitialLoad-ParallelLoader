@@ -197,6 +197,9 @@ def runTQLFile(filePath, namespace):
 def resetNamespace(namespace, createNS = False):
 
     isSuccessful, failuremessage = runCommand('drop namespace ' + namespace + ' CASCADE;')
+
+    isSuccessful, failuremessage = check_component_status(namespace, isSuccessful, failuremessage, "No objects", False)
+
     if createNS:
         isSuccessful, failuremessage = runCommand('create namespace ' + namespace + ';')
 
@@ -336,18 +339,36 @@ def runReview():
                         # Undeploy and remove
                         isSuccessful, failuremessage = runCommand("UNDEPLOY APPLICATION " + qry.appname + ";")
 
+                        isSuccessful, failuremessage = check_component_status(qry.appname, isSuccessful, failuremessage,
+                                                                              "CREATED", False)
+
                         if not isSuccessful:
                             qry.notes += ". FAILED UNDEPLOY; will try again."
                             isSuccessful, failuremessage = runCommand("UNDEPLOY APPLICATION " + qry.appname + ";")
+
+                            isSuccessful, failuremessage = check_component_status(qry.appname, isSuccessful,
+                                                                                  failuremessage,
+                                                                                  "CREATED", False)
+
                             if not isSuccessful:
                                 qry.notes += ". FAILED UNDEPLOY TWICE"
                                 qry.status = "FAILED"
                                 encounteredFailure = True
                         else:
                             isSuccessful, failuremessage = runCommand("DROP APPLICATION " + qry.appname + " CASCADE;")
+
+                            isSuccessful, failuremessage = check_component_status(qry.appname, isSuccessful,
+                                                                                  failuremessage,
+                                                                                  "Cannot find", False)
+
                             if not isSuccessful:
                                 qry.notes += ". FAILED DROP APPLICATION; will try again."
                                 isSuccessful, failuremessage = runCommand("DROP APPLICATION " + qry.appname + " CASCADE;")
+
+                                isSuccessful, failuremessage = check_component_status(qry.appname, isSuccessful,
+                                                                                      failuremessage,
+                                                                                      "Cannot find", False)
+
                                 if not isSuccessful:
                                     qry.notes += ". FAILED DROP APPLICATION TWICE"
                                     qry.status = "FAILED"
@@ -424,6 +445,10 @@ def runReview():
             # Should check here for success, or set up re-try
             isSuccessful, failuremessage = runTQLFile(newTQLFilePath, activeNamespace)
 
+            isSuccessful, failuremessage = check_component_status(qry.appname, isSuccessful,
+                                                                  failuremessage,
+                                                                  "Cannot find", True)
+
             failPoint = ""
 
             fullAppName = activeNamespace + "." + config.ILA_APP_NAME_BASE
@@ -439,11 +464,20 @@ def runReview():
                 # Should check here for success, or set up re-try
                 isSuccessful, failuremessage = runCommand("DEPLOY APPLICATION " + fullAppName + ";")
 
+                isSuccessful, failuremessage = check_component_status(fullAppName, isSuccessful,
+                                                                      failuremessage,
+                                                                      "DEPLOYED", False)
+
                 if isSuccessful:
                     print("Deployment successful -> " + fullAppName)
 
                     try:
                         isSuccessful, failuremessage = runCommand("START APPLICATION " + fullAppName + ";")
+
+                        isSuccessful, failuremessage = check_component_status(qry.appname, isSuccessful,
+                                                                              failuremessage,
+                                                                              "DEPLOYED", True)
+
                         if isSuccessful:
                             print("Start App successful -> " + fullAppName)
                             qry.status = 'RUNNING'
@@ -487,6 +521,11 @@ def runReview():
                 print("Attempting cleanup of apps:")
                 if (failPoint == "START"):
                     isSuccessful, failuremessage = runCommand("UNDEPLOY APPLICATION " + fullAppName + ";")
+
+                    isSuccessful, failuremessage = check_component_status(fullAppName, isSuccessful,
+                                                                          failuremessage,
+                                                                          "CREATED", False)
+
                     if isSuccessful:
                         qry.notes += " [Cleanup: Able to UNDEPLOY]"
                     else:
@@ -560,6 +599,47 @@ def pretty_time_difference(date1, date2):
         returnVal += f"{int(seconds)} seconds"
 
     return returnVal
+
+def check_component_status(objectName, currentIsSuccessful, currentFailureMessage, expectedStatus, invertExpectation):
+    """
+    Checks the status of an application and updates the success status and failure message accordingly.
+
+    Args:
+      appName: The name of the application.
+      currentFailureMessage: The current failure message.
+      expectedStatus: The expected status of the application.
+      invertExpectation: A boolean indicating whether to invert the expectation of the status.
+
+    Returns:
+      A tuple containing the updated success status (boolean) and failure message (string or None).
+    """
+    isSuccessful = currentIsSuccessful
+    failuremessage = currentFailureMessage
+
+    for _ in range(5):  # Loop 5 times to check for 503 errors
+        if not isSuccessful and "503" in failuremessage:
+            print("503 error, checking status for " + objectName)
+            result = runCommand("STATUS " + objectName + ";", True)
+
+            if invertExpectation:
+                if expectedStatus in result:
+                    print("STATUS confirmed NOT SUCCESSFUL for " + objectName)
+                else:
+                    print("STATUS confirmed success for " + objectName)
+                    isSuccessful = True
+                    failuremessage = None
+            else:
+                if expectedStatus in result:
+                    print("STATUS confirmed success for " + objectName)
+                    isSuccessful = True
+                    failuremessage = None
+
+            if "503" in result:
+                print("503 error, retrying status check for " + objectName)
+            else:
+                break  # Exit loop if no 503 error
+
+    return isSuccessful, failuremessage
 
 def isCommandSuccessful(reply):
     answer = StriimCommandResponse(reply[0]['command'], reply[0]['executionStatus'], reply[0]['responseCode'])
@@ -671,3 +751,4 @@ if __name__ == '__main__':
         clear_runid(config.UNIQUE_RUN_ID)
         logging.info(runMessage)
         print(runMessage)
+        
