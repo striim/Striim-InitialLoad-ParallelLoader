@@ -43,6 +43,9 @@ RUNNING_STATUSES = ['RUNNING']
 NEW_EXCLUDES_STATUSES = ['RUNNING', 'COMPLETED', 'FAILED']
 APP_RUNNING_STATUSES = ['RUNNING', 'QUIESCING', 'COMPLETED']
 
+# Defines where to orchestrate. Currently supports BigQuery (BQ) or TinyDB (default: stores locally as a file):
+STAGE_DB_LOCATION = 'TinyDB' #Options: BQ or TinyDB
+
 # DEV and PROD Environments
 ENV = "DEV"  # Set to "PROD" for production environment, provide PROD details below
 
@@ -63,6 +66,8 @@ if ENV == "DEV":
     # CREATE_BQ_TABLE_IF_NOT_EXISTS = False
 
     # BigQuery Configuration
+    # Only needed if value of
+    #  STAGE_DB_LOCATION='BQ'
     BQ_KEYFILE_LOCATION = "/Users/danielferrara/Documents/Striim420/UploadedFiles/daniel-sa-striimfieldproject-a326623e58fe.json" # Update with your actual keyfile path
     PROJECT_ID = "striimfieldproject"
     DATASET_ID = "Daniel"
