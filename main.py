@@ -388,12 +388,12 @@ def runReview():
                         # Set current record to completed
                         oldrow = qry
                         oldrow.iscurrentrow = False
-                        update_record_in_bigquery(oldrow) # mark old row as not current row
+                        update_record(oldrow) # mark old row as not current row
 
                         # This is now our current row, and a new row
                         qnext_id = get_next_id()
                         qry.id = qnext_id
-                        new_result = update_record_in_bigquery(qry, True)
+                        new_result = update_record(qry, True)
 
                         # Update the record with the new information
                         for i in range(len(query_results)):
@@ -401,7 +401,7 @@ def runReview():
                                 query_results[i] = new_result
                                 break
                     else:
-                        new_result = update_record_in_bigquery(qry, True)
+                        new_result = update_record(qry, True)
 
                         # Update the record with the new information
                         for i in range(len(query_results)):
@@ -541,12 +541,12 @@ def runReview():
                 oldrow.iscurrentrow = False
 
                 # Merge all rows
-                update_record_in_bigquery(oldrow) # mark old row as not current row
+                update_record(oldrow) # mark old row as not current row
 
                 # This is now our current row, and a new row
                 qnext_id = get_next_id()
                 qry.id = qnext_id
-                new_result = update_record_in_bigquery(qry, True)
+                new_result = update_record(qry, True)
 
                 # Update the record with the new information
                 for i in range(len(query_results)):
@@ -554,7 +554,7 @@ def runReview():
                         query_results[i] = new_result
                         break
             else:
-                new_result = update_record_in_bigquery(qry, True)
+                new_result = update_record(qry, True)
 
                 for i in range(len(query_results)):
                     if query_results[i].query == qry.query:
@@ -719,7 +719,7 @@ if __name__ == '__main__':
                     next_id = next_id + 1
 
                 # Persist these rows
-                write_to_bigquery(query_results)
+                write_data(query_results)
             firstRun = False
 
         continueRun = True
@@ -751,4 +751,3 @@ if __name__ == '__main__':
         clear_runid(config.UNIQUE_RUN_ID)
         logging.info(runMessage)
         print(runMessage)
-        
