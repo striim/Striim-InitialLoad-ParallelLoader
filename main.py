@@ -617,7 +617,7 @@ def check_component_status(objectName, currentIsSuccessful, currentFailureMessag
     failuremessage = currentFailureMessage
 
     for _ in range(5):  # Loop 5 times to check for 503 errors
-        if not isSuccessful and "503" in failuremessage:
+        if not isSuccessful and ("503" in failuremessage or "Connection aborted" in failuremessage):
             print("503 error, checking status for " + objectName)
             result = runCommand("STATUS " + objectName + ";", True)
 
@@ -634,7 +634,7 @@ def check_component_status(objectName, currentIsSuccessful, currentFailureMessag
                     isSuccessful = True
                     failuremessage = None
 
-            if "503" in result:
+            if ("503" in result or "Connection aborted" in result):
                 print("503 error, retrying status check for " + objectName)
             else:
                 break  # Exit loop if no 503 error
