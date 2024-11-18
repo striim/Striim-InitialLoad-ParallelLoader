@@ -4,6 +4,7 @@ import datetime
 # pip install google google.cloud google-cloud-bigquery
 from google.cloud import bigquery
 from typing import List
+from tinydb import TinyDB, Query
 
 import config
 
@@ -27,6 +28,12 @@ class QueryResult:
 
 current_status: List[QueryResult] = []
 
+# Function to determine which database to use
+def get_database():
+    if config.STAGE_DB_LOCATION.upper() in ('BQ', 'BIGQUERY'):
+        return 'BQ'
+    else:
+        return 'TinyDB'
 
 def read_csv_to_query_results():
     query_results = []
@@ -44,6 +51,93 @@ def read_csv_to_query_results():
                 )
                 query_results.append(query_result)
     return query_results
+
+# ************************************************************************************
+# ************************************************************************************
+# ********************************* tinyDB *******************************************
+# ************************************************************************************
+# ************************************************************************************
+
+# New functions to write data to TinyDB
+def write_to_tinydb(query_results):
+    db = TinyDB('current_position.json')
+
+    for result in query_results:
+        result_dict = result.__dict__.copy()  # Create a copy to modify
+        if result_dict.get('started_datetime'):
+            result_dict['started_datetime'] = result_dict['started_datetime'].strftime('%Y-%m-%d %H:%M:%S.%f')
+        if result_dict.get('finished_datetime'):
+            result_dict['finished_datetime'] = result_dict['finished_datetime'].strftime('%Y-%m-%d %H:%M:%S.%f')
+        db.insert(result_dict)
+
+
+def fetch_record_from_tinydb(record_id):
+    db = TinyDB('current_position.json')
+    Record = Query()
+    result = db.search(Record.id == record_id)
+    if result:
+        return result[0]  # Return the first match
+    else:
+        return None
+
+
+def get_next_id_tinydb():
+    db = TinyDB('current_position.json')
+    if db.all():
+        max_id = max(item['id'] for item in db.all())
+        return max_id + 1
+    else:
+        return 1
+
+
+def update_record_in_tinydb(query_result):
+    db = TinyDB('current_position.json')
+    Record = Query()
+    db.update(query_result.__dict__, Record.id == query_result.id)
+
+
+def clear_runid_tinydb(uniquerunid):
+    db = TinyDB('current_position.json')
+    Record = Query()
+    db.update({'iscurrentrow': False}, Record.iscurrentrow == True and Record.uniquerunid == uniquerunid)
+
+
+def read_from_tinydb(where_clause):
+    db = TinyDB('current_position.json')
+    # Basic filtering for now (more complex logic might need custom code)
+    # This assumes where_clause is something like "iscurrentrow = True"
+    Record = Query()
+    if where_clause == "iscurrentrow = True":
+        results = db.search(Record.iscurrentrow == True)
+    else:  # Add more conditions as needed
+        results = db.all()
+
+    query_result_objects = []
+    for row in results:
+        query_result = QueryResult(
+            roworder=row['roworder'],
+            _id=row['id'],
+            uniquerunid=row['uniquerunid'],
+            query=row['query'],
+            appname=row['appname'],
+            targettbl=row['targettbl'],
+            status=row['status'],
+            namespace=row['namespace'],
+            started_datetime=datetime.datetime.strptime(row['started_datetime'],
+                                                        '%Y-%m-%d %H:%M:%S.%f') if 'started_datetime' in row else None,
+            finished_datetime=datetime.datetime.strptime(row['finished_datetime'],
+                                                         '%Y-%m-%d %H:%M:%S.%f') if 'finished_datetime' in row else None,
+            notes=row['notes'],
+            iscurrentrow=row['iscurrentrow'])
+        query_result_objects.append(query_result)
+    return query_result_objects
+
+
+# ************************************************************************************
+# ************************************************************************************
+# ******************************** BigQuery ******************************************
+# ************************************************************************************
+# ************************************************************************************
 
 
 # New function to write data to BigQuery
@@ -177,7 +271,7 @@ def fetch_record_from_bigquery(record_id):
 
     return None  # Return None if no record found
 
-def get_next_id():
+def get_next_id_bigquery():
     """
     Fetches the maximum ID from the BigQuery table and returns the next ID (max ID + 1).
 
@@ -245,7 +339,7 @@ def update_record_in_bigquery(query_result, return_output = False):
         if return_output:
             return fetch_record_from_bigquery(query_result.id)
 
-def clear_runid(uniquerunid):
+def clear_runid_bigquery(uniquerunid):
     """
     Updates or inserts a record in BigQuery based on the provided QueryResult object.
 
@@ -314,6 +408,55 @@ def read_from_bigquery(where_clause):
         query_result_objects.append(query_result)
     return query_result_objects
 
+
+# ************************************************************************************
+# ************************************************************************************
+# ********************************* General ******************************************
+# ************************************************************************************
+# ************************************************************************************
+
+def write_data(query_results):
+    db = get_database()
+    if db == 'BQ':
+        write_to_bigquery(query_results)
+    else:
+        write_to_tinydb(query_results)
+
+def fetch_record(record_id):
+    db = get_database()
+    if db == 'BQ':
+        return fetch_record_from_bigquery(record_id)
+    else:
+        return fetch_record_from_tinydb(record_id)
+
+def get_next_id():
+    db = get_database()
+    if db == 'BQ':
+        return get_next_id_bigquery()
+    else:
+        return get_next_id_tinydb()
+
+def update_record(query_result):
+    db = get_database()
+    if db == 'BQ':
+        update_record_in_bigquery(query_result)
+    else:
+        update_record_in_tinydb(query_result)
+
+def clear_runid(uniquerunid):
+    db = get_database()
+    if db == 'BQ':
+        clear_runid_bigquery(uniquerunid)
+    else:
+        clear_runid_tinydb(uniquerunid)
+
+def read_data(where_clause):
+    db = get_database()
+    if db == 'BQ':
+        return read_from_bigquery(where_clause)
+    else:
+        return read_from_tinydb(where_clause)
+
 def set_current_status(status):
     global current_status
     current_status = status
@@ -321,7 +464,7 @@ def set_current_status(status):
 def update_and_get_current_status():
     global current_status
     # Clear the internal data structure before populating it with new results
-    current_status = read_from_bigquery("iscurrentrow = True AND uniquerunid = " + str(config.UNIQUE_RUN_ID))
+    current_status = read_data("iscurrentrow = True AND uniquerunid = " + str(config.UNIQUE_RUN_ID))
     return current_status
 
 def get_current_status():
