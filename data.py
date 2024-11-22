@@ -114,6 +114,13 @@ def read_from_tinydb(where_clause):
 
     query_result_objects = []
     for row in results:
+        started_datetime_str = row.get('started_datetime')
+        started_datetime = datetime.datetime.strptime(started_datetime_str,
+                                                      '%Y-%m-%d %H:%M:%S.%f') if started_datetime_str else None
+
+        finished_datetime_str = row.get('finished_datetime')
+        finished_datetime = datetime.datetime.strptime(finished_datetime_str,
+                                                       '%Y-%m-%d %H:%M:%S.%f') if finished_datetime_str else None
         query_result = QueryResult(
             roworder=row['roworder'],
             _id=row['id'],
@@ -123,10 +130,8 @@ def read_from_tinydb(where_clause):
             targettbl=row['targettbl'],
             status=row['status'],
             namespace=row['namespace'],
-            started_datetime=datetime.datetime.strptime(row['started_datetime'],
-                                                        '%Y-%m-%d %H:%M:%S.%f') if 'started_datetime' in row else None,
-            finished_datetime=datetime.datetime.strptime(row['finished_datetime'],
-                                                         '%Y-%m-%d %H:%M:%S.%f') if 'finished_datetime' in row else None,
+            started_datetime=started_datetime,
+            finished_datetime=finished_datetime,
             notes=row['notes'],
             iscurrentrow=row['iscurrentrow'])
         query_result_objects.append(query_result)
