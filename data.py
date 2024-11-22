@@ -441,10 +441,10 @@ def get_next_id():
     else:
         return get_next_id_tinydb()
 
-def update_record(query_result):
+def update_record(query_result, return_output = False):
     db = get_database()
     if db == 'BQ':
-        update_record_in_bigquery(query_result)
+        update_record_in_bigquery(query_result, return_output)
     else:
         update_record_in_tinydb(query_result)
 
