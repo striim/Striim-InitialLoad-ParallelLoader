@@ -462,7 +462,7 @@ def runReview():
 
                 # Deploy this new application
                 # Should check here for success, or set up re-try
-                isSuccessful, failuremessage = runCommand("DEPLOY APPLICATION " + fullAppName + ";")
+                isSuccessful, failuremessage = runCommand(f"DEPLOY APPLICATION {fullAppName} IN {config.DEPLOYMENT_GROUP_TARGET};")
 
                 isSuccessful, failuremessage = check_component_status(fullAppName, isSuccessful,
                                                                       failuremessage,
