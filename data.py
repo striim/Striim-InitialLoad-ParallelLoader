@@ -93,7 +93,12 @@ def get_next_id_tinydb():
 def update_record_in_tinydb(query_result):
     db = TinyDB('current_position.json')
     Record = Query()
-    db.update(query_result.__dict__, Record.id == query_result.id)
+    result_dict = query_result.__dict__.copy()
+    if result_dict.get('started_datetime'):
+        result_dict['started_datetime'] = result_dict['started_datetime'].strftime('%Y-%m-%d %H:%M:%S.%f')
+    if result_dict.get('finished_datetime'):
+        result_dict['finished_datetime'] = result_dict['finished_datetime'].strftime('%Y-%m-%d %H:%M:%S.%f')
+    db.update(result_dict, Record.id == query_result.id)
 
 
 def clear_runid_tinydb(uniquerunid):
