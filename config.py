@@ -46,6 +46,8 @@ APP_RUNNING_STATUSES = ['RUNNING', 'QUIESCING', 'COMPLETED']
 # Defines where to orchestrate. Currently supports BigQuery (BQ) or TinyDB (default: stores locally as a file):
 STAGE_DB_LOCATION = 'TinyDB' #Options: BQ or TinyDB
 
+DEPLOYMENT_GROUP_TARGET = 'default'
+
 # DEV and PROD Environments
 ENV = "DEV"  # Set to "PROD" for production environment, provide PROD details below
 
