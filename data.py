@@ -63,7 +63,7 @@ def write_to_tinydb(query_results):
     db = TinyDB('current_position.json')
 
     for result in query_results:
-        result_dict = result.__dict__.copy()  # Create a copy to modify
+        result_dict = result.__dict__.copy()
         if result_dict.get('started_datetime'):
             result_dict['started_datetime'] = result_dict['started_datetime'].strftime('%Y-%m-%d %H:%M:%S.%f')
         if result_dict.get('finished_datetime'):
@@ -452,6 +452,8 @@ def update_record(query_result, return_output = False):
         update_record_in_bigquery(query_result, return_output)
     else:
         update_record_in_tinydb(query_result)
+    if return_output:
+        return query_result
 
 def clear_runid(uniquerunid):
     db = get_database()
