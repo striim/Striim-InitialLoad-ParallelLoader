@@ -41,7 +41,7 @@ TARGET_TQL_PATH = os.path.join(BASE_PATH, "stage/")
 DONE_STATUSES = ['COMPLETED', 'FAILED']
 RUNNING_STATUSES = ['RUNNING']
 NEW_EXCLUDES_STATUSES = ['RUNNING', 'COMPLETED', 'FAILED']
-APP_RUNNING_STATUSES = ['RUNNING', 'QUIESCING', 'COMPLETED']
+APP_RUNNING_STATUSES = ['RUNNING', 'QUIESCING', 'COMPLETED', 'HALTED', 'TERMINATED']
 
 # Defines where to orchestrate. Currently supports BigQuery (BQ) or TinyDB (default: stores locally as a file):
 STAGE_DB_LOCATION = 'TinyDB' #Options: BQ or TinyDB
