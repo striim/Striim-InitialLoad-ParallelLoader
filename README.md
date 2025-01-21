@@ -57,12 +57,50 @@ The TQL template file should utilize Property Variables (for connection string, 
 
 ## Running the Program
 
-1.  **Install Dependencies:** Ensure that all required Python libraries are installed.
-2.  **Configure:** Update the `config.py` file with your Striim credentials, database settings, and other desired parameters.
-3.  **Prepare Input Files:** Create the `queryfile.txt` and `admin.SW.tql` files as described in the Requirements section.
-4.  **Execute:** Run the `main.py` script to start the orchestration process.
+1.  **Create Python Virtual Environment & Activate:** 
+    
+    ```bash
+    # Mac/Linux
+    python -m venv .venv
+    source .venv/bin/activate
+    ```
+    ```bash
+    # Windows
+    python -m venv .venv
+    source .venv\Scripts\activate
+    ```    
+2. **Install Dependencies:** 
+    ```bash
+    pip install -r requirements.txt
+    ```
+3.  **Configure:** Update the `config.py` file with your Striim credentials, database settings, and other desired parameters.
+4.  **Prepare Input Files:** Create the `queryfile.txt` and `admin.SW.tql` files as described in the Requirements section.
+5.  **Execute:** 
+    ```bash
+    # Mac/Linux
+    python ./main.py
+    ```
+    ```bash
+    # Windows
+    python .\main.py
+    ```
 
 The program will then read the queries from `queryfile.txt`, generate TQL files for each query using the `admin.SW.tql` template, create and deploy Striim applications, monitor their execution, and finally undeploy and drop them.
+
+6.  **Project Clean Up:** While in development the need may arise to clear local cache/logs
+    ```bash
+    # Mac/Linux
+    rm logging/*.{json,log}
+    rm stage/*.tql
+    ```
+    ```bash
+    # Windows
+    del logging\*.json logging\*.log stage\*.tql
+    ```
+    ```sql
+    /* BigQuery database orchestration only */
+    TRUNCATE TABLE `%DatabaseName%.%SchemaName%.striim_orchestration`
+    ```
 
 ## Additional Notes
 
@@ -77,7 +115,7 @@ This README provides a comprehensive overview of the Striim API Orchestration Py
 The output is stored in the following BigQuery table:
 
 ```sql
-CREATE TABLE `striimfieldproject.Daniel.striim_orchestration` (
+CREATE TABLE `%DatabaseName%.%SchemaName%.striim_orchestration` (
     id INTEGER NOT NULL,
     roworder INTEGER,
     uniquerunid INTEGER,

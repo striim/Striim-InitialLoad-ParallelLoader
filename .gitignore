@@ -1,0 +1,5 @@
+.venv
+__pycache__
+logging/*.json
+logging/*.log
+stage/*.tql

@@ -1,7 +1,7 @@
 import os
 
 # Base Paths and File Names
-BASE_PATH = "/Users/danielferrara/PycharmProjects/StriimQueryAutoLoad/" # This should be the base path of this project.
+BASE_PATH = os.getcwd()                                                 # This should be the base path of this project.
 QUERY_FILE = "queryfile.txt"                                            # This should be the list of queries to run with the target table listed (source|target)
 QUERY_FILE_DELIMITER = "|"                                              # In your source QUERY_FILE, this is what is used to delimit the data. PIPE by default.
 
@@ -25,7 +25,7 @@ DEPLOY_WAIT_TIME_SECONDS = 20       # Controls minimum time on how long to wait 
 # CLEANUP_RUN_ID = 100      # Not yet implemented ******************
 
 # Logging
-LOG_OUTPUT_NAME = "striimautoloader.log"
+LOG_OUTPUT_NAME = os.path.join('logging','striimautoloader.log')
 LOG_OUTPUT_PATH = os.path.join(BASE_PATH, LOG_OUTPUT_NAME)  # By default, create a lot in the same directory the app runs in
 
 # Initial Load Automater (ILA) Settings - This generates a unique namespace per app, so that cleanup and app running concurrency is easy. Do not change this.
@@ -35,7 +35,7 @@ ILA_NS_BASE = "ILA" + "_" + str(UNIQUE_RUN_ID) + "_"
 # Derived Paths (constructed using base paths)
 QUERY_FILE_PATH = os.path.join(BASE_PATH, QUERY_FILE)
 SOURCE_TQL_PATH = BASE_PATH
-TARGET_TQL_PATH = os.path.join(BASE_PATH, "stage/")
+TARGET_TQL_PATH = os.path.join(BASE_PATH, "stage")
 
 # Do not change these
 DONE_STATUSES = ['COMPLETED', 'FAILED']
@@ -45,6 +45,7 @@ APP_RUNNING_STATUSES = ['RUNNING', 'QUIESCING', 'COMPLETED', 'HALTED', 'TERMINAT
 
 # Defines where to orchestrate. Currently supports BigQuery (BQ) or TinyDB (default: stores locally as a file):
 STAGE_DB_LOCATION = 'TinyDB' #Options: BQ or TinyDB
+TINYDB_PATH = os.path.join(BASE_PATH,'logging','current_position.json')
 
 DEPLOYMENT_GROUP_TARGET = 'default'
 
