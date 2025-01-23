@@ -60,7 +60,7 @@ def read_csv_to_query_results():
 
 # New functions to write data to TinyDB
 def write_to_tinydb(query_results):
-    db = TinyDB('current_position.json')
+    db = TinyDB(config.TINYDB_PATH)
 
     for result in query_results:
         result_dict = result.__dict__.copy()
@@ -72,7 +72,7 @@ def write_to_tinydb(query_results):
 
 
 def fetch_record_from_tinydb(record_id):
-    db = TinyDB('current_position.json')
+    db = TinyDB(config.TINYDB_PATH)
     Record = Query()
     result = db.search(Record.id == record_id)
     if result:
@@ -82,7 +82,7 @@ def fetch_record_from_tinydb(record_id):
 
 
 def get_next_id_tinydb():
-    db = TinyDB('current_position.json')
+    db = TinyDB(config.TINYDB_PATH)
     if db.all():
         max_id = max(item['id'] for item in db.all())
         return max_id + 1
@@ -91,7 +91,7 @@ def get_next_id_tinydb():
 
 
 def update_record_in_tinydb(query_result):
-    db = TinyDB('current_position.json')
+    db = TinyDB(config.TINYDB_PATH)
     Record = Query()
     result_dict = query_result.__dict__.copy()
     if result_dict.get('started_datetime'):
@@ -102,13 +102,13 @@ def update_record_in_tinydb(query_result):
 
 
 def clear_runid_tinydb(uniquerunid):
-    db = TinyDB('current_position.json')
+    db = TinyDB(config.TINYDB_PATH)
     Record = Query()
     db.update({'iscurrentrow': False}, Record.iscurrentrow == True and Record.uniquerunid == uniquerunid)
 
 
 def read_from_tinydb(where_clause):
-    db = TinyDB('current_position.json')
+    db = TinyDB(config.TINYDB_PATH)
     # Basic filtering for now (more complex logic might need custom code)
     # This assumes where_clause is something like "iscurrentrow = True"
     Record = Query()
