@@ -89,59 +89,119 @@ class Elasticsearch:
         self.elasticsearchClusterStorageTotal = elasticsearchClusterStorageTotal
 
 #
-#  Usage: striim_apps, striim_nodes, es_nodes = map_mon_json_response(json_response)
+#  Usage: striim_apps, striim_nodes, es_nodes, response_valid = map_mon_json_response(json_response)
 #
 
 def map_mon_json_response(json_response):
-    parsed_json = json_response #json.loads(json_response)
+    parsed_json = json_response
     striim_applications = []
-
-    for app in parsed_json[0]["output"]["striimApplications"]:
-        app_data = app #[0]
-
-        if "entityType" in app_data:
-            striim_applications.append(
-                StriimApplication(
-                    app_data["entityType"],
-                    app_data["fullName"],
-                    app_data["statusChange"],
-                    app_data["rate"],
-                    app_data["sourceRate"],
-                    app_data["cpuRate"],
-                    app_data["numServers"],
-                    app_data["latestActivity"]
-                )
-            )
-
     striim_cluster_nodes = []
-    for node in parsed_json[0]["output"]["striimClusterNodes"]:
-        node_data = node #[0]
-
-        striim_cluster_nodes.append(
-            StriimClusterNode(
-                node_data["entityType"],
-                node_data.get("name", node_data.get("fullName")),
-                node_data["version"],
-                node_data["freeMemory"],
-                node_data["cpuRate"],
-                node_data["uptime"]
-            )
-        )
-
     elasticsearch_nodes = []
 
-    es_data = parsed_json[0]["output"]["elasticsearch"]
+    response_valid = True  # Assume valid initially
 
-    elasticsearch_nodes.append(
-        Elasticsearch(
-            es_data["elasticsearchReceiveThroughput"],
-            es_data["elasticsearchTransmitThroughput"],
-            es_data["elasticsearchClusterStorageFree"],
-            es_data["elasticsearchClusterStorageTotal"]
-        )
-    )
+    # --- Section 1: Striim Applications (determines global response_valid) ---
+    try:
+        # Basic structural validation for striimApplications path
+        if not (parsed_json and isinstance(parsed_json, list) and len(parsed_json) > 0 and
+                isinstance(parsed_json[0], dict) and "output" in parsed_json[0] and
+                isinstance(parsed_json[0]["output"], dict) and
+                "striimApplications" in parsed_json[0]["output"] and
+                isinstance(parsed_json[0]["output"]["striimApplications"], list)):
+            response_valid = False
+            applications_data = []
+        else:
+            applications_data = parsed_json[0]["output"]["striimApplications"]
+            # If applications_data is an empty list, the loop below won't run,
+            # and response_valid remains True, which is generally correct.
+            # If an empty list of apps itself should be invalid, add:
+            # if not applications_data: response_valid = False
 
-    return (striim_applications, striim_cluster_nodes, elasticsearch_nodes)
+        if response_valid:  # Only proceed if basic structure was okay
+            for app_data in applications_data:
+                if not isinstance(app_data, dict):
+                    response_valid = False  # app_data item is not a dictionary
+                    break
+
+                # Critical check: "fullName" must exist and not be None
+                if "fullName" not in app_data or app_data.get("fullName") is None:
+                    response_valid = False
+                    break  # One missing/None fullName invalidates the response
+
+                # If fullName is present, proceed to create StriimApplication object.
+                # The 'entityType' check is from your original code structure.
+                if "entityType" in app_data:
+                    striim_applications.append(
+                        StriimApplication(
+                            app_data["entityType"],
+                            app_data["fullName"],  # Known to exist and be non-None
+                            app_data.get("statusChange"),
+                            app_data.get("rate"),
+                            app_data.get("sourceRate"),
+                            app_data.get("cpuRate"),
+                            app_data.get("numServers"),
+                            app_data.get("latestActivity")
+                        )
+                    )
+                # If an app has fullName but no entityType, it's just not added to the list.
+                # This does not make response_valid False by this simplified rule.
+
+    except (TypeError, KeyError, IndexError) as e:
+        # Error during parsing of striimApplications structure
+        print(f"Error processing striimApplications: {e}")
+        response_valid = False
+
+    # If response is deemed invalid due to striimApplications, clear all lists
+    if not response_valid:
+        return [], [], [], False
+
+    # --- Section 2: Striim Cluster Nodes (populated if response_valid is still True) ---
+    try:
+        if (parsed_json and isinstance(parsed_json, list) and len(parsed_json) > 0 and
+                isinstance(parsed_json[0], dict) and "output" in parsed_json[0] and
+                isinstance(parsed_json[0]["output"], dict) and
+                "striimClusterNodes" in parsed_json[0]["output"] and
+                isinstance(parsed_json[0]["output"]["striimClusterNodes"], list)):
+
+            for node_data in parsed_json[0]["output"]["striimClusterNodes"]:
+                if isinstance(node_data, dict):
+                    # Using previous logic for adding nodes (e.g., entityType and version mandatory for addition)
+                    if "entityType" in node_data and "version" in node_data:
+                        striim_cluster_nodes.append(
+                            StriimClusterNode(
+                                node_data["entityType"],
+                                node_data.get("name", node_data.get("fullName")),
+                                node_data["version"],
+                                node_data.get("freeMemory"),
+                                node_data.get("cpuRate"),
+                                node_data.get("uptime")
+                            )
+                        )
+    except (TypeError, KeyError, IndexError) as e:
+        print(f"Warning: Error processing striimClusterNodes: {e}")
+        striim_cluster_nodes = []  # Clear if error, but doesn't make global response invalid here
+
+    # --- Section 3: Elasticsearch Nodes (populated if response_valid is still True) ---
+    try:
+        if (parsed_json and isinstance(parsed_json, list) and len(parsed_json) > 0 and
+                isinstance(parsed_json[0], dict) and "output" in parsed_json[0] and
+                isinstance(parsed_json[0]["output"], dict) and
+                "elasticsearch" in parsed_json[0]["output"] and
+                isinstance(parsed_json[0]["output"]["elasticsearch"], dict)):
+            es_data = parsed_json[0]["output"]["elasticsearch"]
+            elasticsearch_nodes.append(
+                Elasticsearch(
+                    es_data.get("elasticsearchReceiveThroughput"),
+                    es_data.get("elasticsearchTransmitThroughput"),
+                    es_data.get("elasticsearchClusterStorageFree"),
+                    es_data.get("elasticsearchClusterStorageTotal")
+                )
+            )
+    except (TypeError, KeyError, IndexError) as e:
+        print(f"Warning: Error processing elasticsearch: {e}")
+        elasticsearch_nodes = []  # Clear if error
+
+    return striim_applications, striim_cluster_nodes, elasticsearch_nodes, response_valid
 
 # Example: update_application_components(applications[0], json_response)
 
@@ -282,18 +342,76 @@ def isILApp(str):
             return True
     return False
 
+def doGetMonOutputAndReview():
+    start_time = time.time()
+    response_valid = False
+    MAX_DURATION_MINUTES = 15 # Run this again for up to 15 minutes before saying we failed.
+    MAX_DURATION_SECONDS = MAX_DURATION_MINUTES * 60
+    RETRY_DELAY_SECONDS = 30  # Time to wait before retrying if response is invalid
+
+    print(f"Attempting to retrieve valid data for up to {MAX_DURATION_MINUTES} minutes...")
+
+    # Loop while the response is not valid AND time limit has not been reached
+    while not response_valid and (time.time() - start_time < MAX_DURATION_SECONDS):
+        elapsed_time_seconds = time.time() - start_time
+        remaining_time_seconds = MAX_DURATION_SECONDS - elapsed_time_seconds
+
+        print(f"Executing runMon(). Time remaining: {remaining_time_seconds:.0f}s")
+
+        try:
+            json_response = runMon()  # Your function to get data
+
+            # Pass the response to the mapping function
+            # It returns empty lists if response_valid_from_func is False
+            s_apps_temp, s_nodes_temp, e_nodes_temp, response_valid_from_func = map_mon_json_response(json_response)
+
+            if response_valid_from_func:
+                print("Response from runMon() processed and is valid.")
+                striim_apps = s_apps_temp
+                response_valid = True  # Mark as valid to exit the loop
+            else:
+                print(f"Response from runMon() is invalid (e.g., missing 'fullName' in an application).")
+                # Check if time permits another retry before sleeping
+                if (time.time() - start_time + RETRY_DELAY_SECONDS < MAX_DURATION_SECONDS):
+                    print(f"Waiting {RETRY_DELAY_SECONDS} seconds before retrying...")
+                    time.sleep(RETRY_DELAY_SECONDS)
+                else:
+                    print("Time limit approaching, will not attempt further retries after this.")
+                    break  # Exit loop if next retry would exceed time limit
+
+        except Exception as e:  # Catch potential errors from runMon() itself or unexpected issues
+            print(f"An unexpected error occurred during runMon() or mapping: {e}")
+            # Check if time permits another retry before sleeping
+            if (time.time() - start_time + RETRY_DELAY_SECONDS < MAX_DURATION_SECONDS):
+                print(f"Waiting {RETRY_DELAY_SECONDS} seconds before retrying after error...")
+                time.sleep(RETRY_DELAY_SECONDS)
+            else:
+                print("Time limit approaching, will not attempt further retries after this error.")
+                break  # Exit loop
+
+    # --- After the loop ---
+    if response_valid:
+        print(f"Successfully obtained valid data within {MAX_DURATION_MINUTES} minutes.")
+        # Proceed to use striim_apps, striim_nodes, es_nodes
+        # print(f"Striim Apps: {len(striim_apps)}, Nodes: {len(striim_nodes)}, ES: {len(es_nodes)}")
+    else:
+        elapsed_time_final = time.time() - start_time
+        print(f"Failed to obtain valid data after {elapsed_time_final:.0f} seconds.")
+        # striim_apps, striim_nodes, es_nodes will be empty or from the last invalid attempt
+        # Ensure they are definitively empty if that's desired on failure
+        striim_apps, striim_nodes, es_nodes = [], [], []
+        # Handle this failure scenario as needed (e.g., log, raise exception, exit)
+
+    return striim_apps
+
 def runReview():
     # First, we need to check if there are any existing IL apps running.
     global query_results
     global next_allowed_run
 
     # Get node information: mon;
-    json_response = runMon()
 
-    # print(json_response)
-
-    # Assign values
-    striim_apps, striim_nodes, es_nodes = map_mon_json_response(json_response)
+    striim_apps = doGetMonOutputAndReview()
 
     runningApps = 0
 
@@ -487,13 +605,12 @@ def runReview():
                             qry.status = "FAILED"
                             qry.notes += "Start App Failed: " + failuremessage
                     except Exception as e:
-                        json_response2 = runMon()
-                        striim_apps2, striim_nodes2, es_nodes2 = map_mon_json_response(json_response2)
+                        striim_apps2 = doGetMonOutputAndReview()
 
                         failPoint = "START"
                         qry.status = "FAILED"
 
-                        for app in [app for app in striim_apps if
+                        for app in [app for app in striim_apps2 if
                                     app.full_name == fullAppName and app.status_change in config.APP_RUNNING_STATUSES]:
                             # Update query results with LOADED and NS
                             qry.status = 'RUNNING'
@@ -670,11 +787,8 @@ def getNewFile(sourcePath, sourceFileName, targetPath, queryText, targetTable, n
     return fullTargetPath
 
 def doNSClean():
-    # Get node information: mon;
-    json_response = runMon()
 
-    # Assign values
-    striim_apps, striim_nodes, es_nodes = map_mon_json_response(json_response)
+    striim_apps =  doGetMonOutputAndReview()
 
     # Go through each app that fits our Initial Load app criteria (i.e. made by this program) in order to find completed
     for app in [app for app in striim_apps if isILApp(app.full_name)]:
