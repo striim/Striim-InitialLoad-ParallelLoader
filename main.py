@@ -302,7 +302,7 @@ def runCommand(strCmd, returnResultOnly = False):
             return (executionStatus != "Failure"), failureMessage
     except Exception as e:
         print('Error at runCommand:', strCmd, e)
-        return ''
+        return False, 'Error occurred'
 
 def runMon(component=''):
     data = 'mon;'
