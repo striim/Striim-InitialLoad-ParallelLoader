@@ -1,10 +1,13 @@
 import csv
 import datetime
+from functools import reduce
 
 # pip install google google.cloud google-cloud-bigquery
 from google.cloud import bigquery
 from typing import List
 from tinydb import TinyDB, Query
+
+import re
 
 import config
 
@@ -107,38 +110,70 @@ def clear_runid_tinydb(uniquerunid):
     db.update({'iscurrentrow': False}, Record.iscurrentrow == True and Record.uniquerunid == uniquerunid)
 
 
-def read_from_tinydb(where_clause):
+def read_from_tinydb(where_clause_str: str) -> List[QueryResult]:  # Added type hint for return
     db = TinyDB(config.TINYDB_PATH)
-    # Basic filtering for now (more complex logic might need custom code)
-    # This assumes where_clause is something like "iscurrentrow = True"
-    Record = Query()
-    if where_clause == "iscurrentrow = True":
-        results = db.search(Record.iscurrentrow == True)
-    else:  # Add more conditions as needed
-        results = db.all()
+    Record = Query()  # TinyDB's Query object
 
-    query_result_objects = []
-    for row in results:
-        started_datetime_str = row.get('started_datetime')
+    conditions = []
+
+    # Parse "iscurrentrow = True" or "iscurrentrow = False"
+    is_current_match = re.search(r"iscurrentrow\s*=\s*(True|False)", where_clause_str, re.IGNORECASE)
+    if is_current_match:
+        val = is_current_match.group(1).lower() == 'true'
+        conditions.append(Record.iscurrentrow == val)
+
+    # Parse "uniquerunid = <number>"
+    unique_run_id_match = re.search(r"uniquerunid\s*=\s*(\d+)", where_clause_str)
+    if unique_run_id_match:
+        val = int(unique_run_id_match.group(1))
+        conditions.append(Record.uniquerunid == val)
+
+    # Add more parsers for other fields if needed in the future
+
+    results_from_db = []
+    if conditions:
+        # Combine conditions using AND logic (implicit in TinyDB query construction)
+        final_query = conditions[0]
+        if len(conditions) > 1:
+            # For TinyDB, if you have multiple conditions for Record.field,
+            # you build them up using logical operators: (Query().field1 == val1) & (Query().field2 == val2)
+            final_query = reduce(lambda acc, cond: acc & cond, conditions)  # Pass conditions directly
+        results_from_db = db.search(final_query)
+    elif not where_clause_str.strip():  # No where clause, get all (use with caution)
+        # This case is unlikely given current usage by update_and_get_current_status
+        print(f"Warning: read_from_tinydb called with empty where_clause. Returning all documents.")
+        results_from_db = db.all()
+    else:
+        # If clause is present but not parsed by the above, it's an unhandled case.
+        print(
+            f"Warning: Unhandled or complex where_clause in read_from_tinydb: '{where_clause_str}'. For safety, returning no results.")
+        results_from_db = []
+
+    query_result_objects: List[QueryResult] = []  # Added type hint
+    for row_dict in results_from_db:  # Renamed 'row' to 'row_dict' for clarity
+        started_datetime_str = row_dict.get('started_datetime')
         started_datetime = datetime.datetime.strptime(started_datetime_str,
                                                       '%Y-%m-%d %H:%M:%S.%f') if started_datetime_str else None
 
-        finished_datetime_str = row.get('finished_datetime')
+        finished_datetime_str = row_dict.get('finished_datetime')
         finished_datetime = datetime.datetime.strptime(finished_datetime_str,
                                                        '%Y-%m-%d %H:%M:%S.%f') if finished_datetime_str else None
+
+        # Ensure all necessary fields from QueryResult are handled, using .get() for robustness
         query_result = QueryResult(
-            roworder=row['roworder'],
-            _id=row['id'],
-            uniquerunid=row['uniquerunid'],
-            query=row['query'],
-            appname=row['appname'],
-            targettbl=row['targettbl'],
-            status=row['status'],
-            namespace=row['namespace'],
+            roworder=row_dict.get('roworder'),
+            _id=row_dict.get('id'),  # In TinyDB, documents have 'doc_id', but you store your own 'id'
+            uniquerunid=row_dict.get('uniquerunid'),
+            query=row_dict.get('query'),
+            appname=row_dict.get('appname'),
+            targettbl=row_dict.get('targettbl'),
+            status=row_dict.get('status'),
+            namespace=row_dict.get('namespace'),
             started_datetime=started_datetime,
             finished_datetime=finished_datetime,
-            notes=row['notes'],
-            iscurrentrow=row['iscurrentrow'])
+            notes=row_dict.get('notes'),
+            iscurrentrow=row_dict.get('iscurrentrow', False)  # Default to False if missing
+        )
         query_result_objects.append(query_result)
     return query_result_objects
 
