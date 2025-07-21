@@ -273,7 +273,8 @@ def runCommand(strCmd, returnResultOnly = False):
     data = strCmd + ';' if not strCmd.endswith(';') else strCmd
 
     try:
-        resp = requests.post(prefixh + node + '/api/v2/tungsten', headers=headers, data=data)
+        timeout_in_seconds = 180
+        resp = requests.post(prefixh + node + '/api/v2/tungsten', headers=headers, data=data, timeout=timeout_in_seconds)
         # If passphrase is needed:
         # resp = requests.post(prefixh + node + '/api/v2/tungsten?passphrase=1234', headers=headers, data=data)
 
@@ -461,6 +462,9 @@ def runReview():
                                                                               "CREATED", False)
 
                         if not isSuccessful:
+                            qry.status = "COMPLETED-FAILEDDROP"
+
+                            # Ignore rest -----
                             qry.notes += ". FAILED UNDEPLOY; will try again."
                             isSuccessful, failuremessage = runCommand("UNDEPLOY APPLICATION " + qry.appname + ";")
 
