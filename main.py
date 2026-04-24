@@ -8,11 +8,14 @@ import os
 import config
 
 import json
-from collections import namedtuple
-
-import csv
-
-from data import *
+from data import (
+    write_data,
+    get_next_id,
+    update_record,
+    clear_runid,
+    update_and_get_current_status,
+    read_csv_to_query_results,
+)
 
 
 """
@@ -26,35 +29,37 @@ password = config.STRIIM_ADMIN_PWD # User your ADMIN password here
 polling_interval_seconds = config.APP_MONITOR_INTERVAL_SECONDS # This controls how often this will check for updates
 log_output_path = config.LOG_OUTPUT_PATH # This indicates the path to store the output logs (persisted logging)
 
-logDebug = False #Change to True if you want to log debugging information
-
-IL_Clean_Done = False
-
 # Notes about the Code
 # * This code is meant to be run as-is and be able to return valueable Initial Load or CDC Data.
 # * This code is provided as a sample, in order to support being able to work with Striim's Rest API
 # * This code is not officially supported as part of Striim
 
-#generate REST API authentication token
-data = {'username': username, 'password': password}
-resp = requests.post(prefixh + node + '/security/authenticate', data=data)
-jkvp = json.loads(resp.text)
-sToken = jkvp['token'] if config.STRIIM_API_TOKEN == "" else config.STRIIM_API_TOKEN
-# sToken = '2E9LbUtMvDpM.AgclhtHhPtgaDKsq'
-logging.basicConfig(filename=log_output_path, level=logging.INFO, format='%(asctime)s:%(levelname)s:%(message)s')
+def authenticate():
+    """Obtain a fresh Striim API token and return the authorization headers."""
+    if config.STRIIM_API_TOKEN:
+        return {'authorization': 'STRIIM-TOKEN ' + config.STRIIM_API_TOKEN, 'content-type': 'text/plain'}
+    resp = None
+    try:
+        resp = requests.post(
+            prefixh + node + '/security/authenticate',
+            data={'username': username, 'password': password},
+            timeout=30
+        )
+        jkvp = json.loads(resp.text)
+        token = jkvp['token']
+    except Exception as e:
+        response_preview = resp.text[:200] if resp is not None else "(no response — connection failed)"
+        raise SystemExit(
+            f"Authentication failed. Check STRIIM_NODE and credentials. "
+            f"Error: {e}\nResponse was: {response_preview}"
+        )
+    return {'authorization': 'STRIIM-TOKEN ' + token, 'content-type': 'text/plain'}
 
-#define headers
-headers = {'authorization':'STRIIM-TOKEN ' + sToken, 'content-type': 'text/plain'}
+headers = {}  # Initialized in __main__ block via authenticate()
 
 query_results = []
 
 next_allowed_run = datetime.datetime.now()
-
-class StriimCommandResponse:
-    def __init__(self, command, execution_status, response_code):
-        self.command = command
-        self.execution_status = execution_status
-        self.response_code = response_code
 
 class StriimApplication:
     def __init__(self, entity_type, full_name, status_change, rate, source_rate, cpu_rate, num_servers, latest_activity):
@@ -211,11 +216,10 @@ def update_application_components(application, json_response):
         application.components.append(component)
 
 def doDebugLog(text):
-    if logDebug:
-        print(text)
-        logging.info(text)
+    logging.debug(text)
 
-def runTQLFile(filePath, namespace):
+def runTQLFile(filePath, namespace, _depth=0):
+    global headers
 
     fileContents = ""
 
@@ -234,9 +238,12 @@ def runTQLFile(filePath, namespace):
 
         if 'reason' in resp.text and 'tkn' in resp.text:
             doDebugLog("got bad response in mon (tkn), trying again")
+            if _depth >= 3:
+                return False, 'Max retries exceeded'
             # If the response is bad, let's try again in 1 second
             time.sleep(1)
-            return runTQLFile(filePath)
+            headers = authenticate()
+            return runTQLFile(filePath, namespace, _depth + 1)
         else:
             result = json.loads(resp.text)
             print(result)
@@ -252,25 +259,31 @@ def runTQLFile(filePath, namespace):
             return isSuccessful, failureMessage
     except Exception as e:
         print('Error at runFilePath:', filePath, e)
-        return ''
+        return False, str(e)
 
-def resetNamespace(namespace, createNS = False):
+def resetNamespace(namespace, createNS=False):
 
     isSuccessful, failuremessage = runCommand('drop namespace ' + namespace + ' CASCADE;')
 
     isSuccessful, failuremessage = check_component_status(namespace, isSuccessful, failuremessage, "No objects", False)
 
     if createNS:
-        isSuccessful, failuremessage = runCommand('create namespace ' + namespace + ';')
+        ns_not_found = (failuremessage and
+                        ("Cannot find" in failuremessage or "does not exist" in failuremessage))
+        if isSuccessful or ns_not_found:
+            isSuccessful, failuremessage = runCommand('create namespace ' + namespace + ';')
+        # else: drop failed for a real reason; return that failure without trying to create
 
     return isSuccessful, failuremessage
 
-def runCommand(strCmd, returnResultOnly = False):
+def runCommand(strCmd, returnResultOnly=False, _depth=0):
+    global headers
 
     if strCmd == '':
-        return
+        return False, 'Empty command provided'
 
-    data = strCmd + ';' if not strCmd.endswith(';') else strCmd
+    stripped = strCmd.rstrip()
+    data = stripped + ';' if not stripped.endswith(';') else stripped
 
     try:
         timeout_in_seconds = 180
@@ -280,9 +293,12 @@ def runCommand(strCmd, returnResultOnly = False):
 
         if 'reason' in resp.text and 'tkn' in resp.text:
             doDebugLog("got bad response in mon (tkn), trying again")
+            if _depth >= 3:
+                return (False, 'Max retries exceeded') if not returnResultOnly else None
             # If the response is bad, let's try again in 1 second
             time.sleep(1)
-            return runCommand(strCmd)
+            headers = authenticate()
+            return runCommand(strCmd, returnResultOnly, _depth + 1)
         else:
             result = json.loads(resp.text)
 
@@ -314,28 +330,9 @@ def runMon(component=''):
 
     return runCommand(data, True)
 
-    # try:
-    #     resp = requests.post(prefixh + node + '/api/v2/tungsten', headers=headers, data=data)
-    #
-    #     doDebugLog('runMon: resp.text: ' + str(resp.text))
-    #     # resp.text == 'tkn' \
-    #     #                 or resp.text == '{"reason":"tkn"}' \
-    #     #                 or resp.text == "{'reason': 'tkn'}" \
-    #     #                 or resp.text == '{"reason": "tkn"}'
-    #     if 'reason' in resp.text and 'tkn' in resp.text:
-    #         doDebugLog("got bad response in mon (tkn), trying again")
-    #         # If the response is bad, let's try again in 1 second
-    #         time.sleep(1)
-    #         return runMon(component)
-    #     else:
-    #         return json.loads(resp.text)
-    # except Exception as e:
-    #     print('Error at runMon:', component, e)
-    #     return ''
-
 # This determines if a particular app is part of this Initial Load Automater Appset
-def isILApp(str):
-    segments = str.split('.')
+def isILApp(full_name):
+    segments = full_name.split('.')
 
     if len(segments) == 2:
         # Check if the first segment starts with 'abc'
@@ -352,6 +349,7 @@ def doGetMonOutputAndReview():
 
     print(f"Attempting to retrieve valid data for up to {MAX_DURATION_MINUTES} minutes...")
 
+    striim_apps = []
     # Loop while the response is not valid AND time limit has not been reached
     while not response_valid and (time.time() - start_time < MAX_DURATION_SECONDS):
         elapsed_time_seconds = time.time() - start_time
@@ -398,9 +396,7 @@ def doGetMonOutputAndReview():
     else:
         elapsed_time_final = time.time() - start_time
         print(f"Failed to obtain valid data after {elapsed_time_final:.0f} seconds.")
-        # striim_apps, striim_nodes, es_nodes will be empty or from the last invalid attempt
-        # Ensure they are definitively empty if that's desired on failure
-        striim_apps, striim_nodes, es_nodes = [], [], []
+        striim_apps = []  # Ensure empty list returned on failure
         # Handle this failure scenario as needed (e.g., log, raise exception, exit)
 
     return striim_apps
@@ -409,6 +405,9 @@ def runReview():
     # First, we need to check if there are any existing IL apps running.
     global query_results
     global next_allowed_run
+
+    # Refresh state from DB to pick up any changes made since last iteration
+    query_results = update_and_get_current_status()
 
     # Get node information: mon;
 
@@ -442,7 +441,6 @@ def runReview():
             for qry in [qry for qry in query_results if qry.status in config.RUNNING_STATUSES]:
 
                 made_changes = False
-                made_new_record_change = False
 
                 # Running Apps
                 if app.namespace == qry.namespace:
@@ -465,7 +463,7 @@ def runReview():
                             qry.status = "COMPLETED-FAILEDDROP"
 
                             # Ignore rest -----
-                            qry.notes += ". FAILED UNDEPLOY; will try again."
+                            qry.notes = (qry.notes or "") + ". FAILED UNDEPLOY; will try again."
                             isSuccessful, failuremessage = runCommand("UNDEPLOY APPLICATION " + qry.appname + ";")
 
                             isSuccessful, failuremessage = check_component_status(qry.appname, isSuccessful,
@@ -473,7 +471,7 @@ def runReview():
                                                                                   "CREATED", False)
 
                             if not isSuccessful:
-                                qry.notes += ". FAILED UNDEPLOY TWICE"
+                                qry.notes = (qry.notes or "") + ". FAILED UNDEPLOY TWICE"
                                 qry.status = "FAILED"
                                 encounteredFailure = True
                         else:
@@ -484,7 +482,7 @@ def runReview():
                                                                                   "Cannot find", False)
 
                             if not isSuccessful:
-                                qry.notes += ". FAILED DROP APPLICATION; will try again."
+                                qry.notes = (qry.notes or "") + ". FAILED DROP APPLICATION; will try again."
                                 isSuccessful, failuremessage = runCommand("DROP APPLICATION " + qry.appname + " CASCADE;")
 
                                 isSuccessful, failuremessage = check_component_status(qry.appname, isSuccessful,
@@ -492,44 +490,27 @@ def runReview():
                                                                                       "Cannot find", False)
 
                                 if not isSuccessful:
-                                    qry.notes += ". FAILED DROP APPLICATION TWICE"
+                                    qry.notes = (qry.notes or "") + ". FAILED DROP APPLICATION TWICE"
                                     qry.status = "FAILED"
                                     encounteredFailure = True
 
-                        qry.notes += "; Total Execution time: " + pretty_time_difference(qry.started_datetime, qry.finished_datetime)
+                        qry.notes = (qry.notes or "") + "; Total Execution time: " + pretty_time_difference(qry.started_datetime, qry.finished_datetime)
 
                         isSuccessful, failuremessage = resetNamespace(qry.namespace)
                         if not isSuccessful:
-                            qry.notes += ". FAILED DROP NAMESPACE"
+                            qry.notes = (qry.notes or "") + ". FAILED DROP NAMESPACE"
                             qry.status = "FAILED"
 
                 if made_changes:
                     # If query changed, save this one
                     # Merge single row
-                    if made_new_record_change:
-                        # Set current record to completed
-                        oldrow = qry
-                        oldrow.iscurrentrow = False
-                        update_record(oldrow) # mark old row as not current row
+                    new_result = update_record(qry, True)
 
-                        # This is now our current row, and a new row
-                        qnext_id = get_next_id()
-                        qry.id = qnext_id
-                        new_result = update_record(qry, True)
-
-                        # Update the record with the new information
-                        for i in range(len(query_results)):
-                            if query_results[i].query == qry.query:  # Assuming 'id' is unique
-                                query_results[i] = new_result
-                                break
-                    else:
-                        new_result = update_record(qry, True)
-
-                        # Update the record with the new information
-                        for i in range(len(query_results)):
-                            if query_results[i].query == qry.query:  # Assuming 'id' is unique
-                                query_results[i] = new_result
-                                break
+                    # Update the record with the new information
+                    for i in range(len(query_results)):
+                        if query_results[i].id == qry.id:  # Assuming 'id' is unique
+                            query_results[i] = new_result
+                            break
 
 
     if datetime.datetime.now() < next_allowed_run:
@@ -539,7 +520,6 @@ def runReview():
     for qry in sorted([qry for qry in query_results if qry.status not in config.NEW_EXCLUDES_STATUSES], key=lambda qry: qry.roworder):
 
         made_changes = False
-        made_new_record_change = False
 
         namespaceCount = runningApps + 1
 
@@ -607,7 +587,7 @@ def runReview():
                         else:
                             failPoint = "START"
                             qry.status = "FAILED"
-                            qry.notes += "Start App Failed: " + failuremessage
+                            qry.notes = (qry.notes or "") + "Start App Failed: " + failuremessage
                     except Exception as e:
                         striim_apps2 = doGetMonOutputAndReview()
 
@@ -621,7 +601,7 @@ def runReview():
                             qry.started_datetime = datetime.datetime.now()
                 else:
                     failPoint = "DEPLOY"
-                    qry.notes += "Unable to deploy: " + failuremessage
+                    qry.notes = (qry.notes or "") + "Unable to deploy: " + failuremessage
                     qry.status = "FAILED"
                     qry.finished_datetime = datetime.datetime.now()
                     print(qry.notes)
@@ -630,7 +610,7 @@ def runReview():
                 # Should check here for success, or set up re-try
             else:
                 failPoint = "CREATE"
-                qry.notes += "Unable to create: " + failuremessage
+                qry.notes = (qry.notes or "") + "Unable to create: " + failuremessage
                 qry.status = "FAILED"
                 qry.finished_datetime = datetime.datetime.now()
                 print(qry.notes)
@@ -648,39 +628,21 @@ def runReview():
                                                                           "CREATED", False)
 
                     if isSuccessful:
-                        qry.notes += " [Cleanup: Able to UNDEPLOY]"
+                        qry.notes = (qry.notes or "") + " [Cleanup: Able to UNDEPLOY]"
                     else:
-                        qry.notes += " [Cleanup Failure: Unable to UNDEPLOY: -> " + failuremessage + "]"
+                        qry.notes = (qry.notes or "") + " [Cleanup Failure: Unable to UNDEPLOY: -> " + failuremessage + "]"
                 #if (failPoint == "DEPLOY"):
                 isSuccessful, failuremessage = resetNamespace(qry.namespace)
 
         if made_changes:
             # If query changed, save this one
             # Merge single row
-            if made_new_record_change:
-                oldrow = qry
-                oldrow.iscurrentrow = False
+            new_result = update_record(qry, True)
 
-                # Merge all rows
-                update_record(oldrow) # mark old row as not current row
-
-                # This is now our current row, and a new row
-                qnext_id = get_next_id()
-                qry.id = qnext_id
-                new_result = update_record(qry, True)
-
-                # Update the record with the new information
-                for i in range(len(query_results)):
-                    if query_results[i].query == qry.query:
-                        query_results[i] = new_result
-                        break
-            else:
-                new_result = update_record(qry, True)
-
-                for i in range(len(query_results)):
-                    if query_results[i].query == qry.query:
-                        query_results[i] = new_result
-                        break
+            for i in range(len(query_results)):
+                if query_results[i].id == qry.id:
+                    query_results[i] = new_result
+                    break
 
         # Do only one change at a time
         break
@@ -703,23 +665,20 @@ def pretty_time_difference(date1, date2):
         date2 = date2.replace(tzinfo=datetime.timezone.utc)
 
     time_difference = date2 - date1
-    total_seconds = time_difference.total_seconds()
+    total_seconds = abs(time_difference.total_seconds())
 
-    hours, remainder = divmod(total_seconds, 3600)
+    hours, remainder = divmod(int(total_seconds), 3600)
     minutes, seconds = divmod(remainder, 60)
 
-    returnVal = ""
-
+    parts = []
     if hours > 0:
-        returnVal += f"{int(hours)} hours, "
-
+        parts.append(f"{hours} {'hour' if hours == 1 else 'hours'}")
     if minutes > 0:
-        returnVal += f"{int(minutes)} minutes " + (", " if hours > 0 else " and ")
+        parts.append(f"{minutes} {'minute' if minutes == 1 else 'minutes'}")
+    if seconds > 0 or not parts:
+        parts.append(f"{seconds} {'second' if seconds == 1 else 'seconds'}")
 
-    if seconds > 0:
-        returnVal += f"{int(seconds)} seconds"
-
-    return returnVal
+    return ", ".join(parts)
 
 def check_component_status(objectName, currentIsSuccessful, currentFailureMessage, expectedStatus, invertExpectation):
     """
@@ -738,45 +697,44 @@ def check_component_status(objectName, currentIsSuccessful, currentFailureMessag
     failuremessage = currentFailureMessage
 
     for _ in range(5):  # Loop 5 times to check for 503 errors
-        if not isSuccessful and ("503" in failuremessage or "Connection aborted" in failuremessage):
+        if not isSuccessful and failuremessage and ("503" in failuremessage or "Connection aborted" in failuremessage):
             print("503 error, checking status for " + objectName)
             result = runCommand("STATUS " + objectName + ";", True)
 
+            if result is None:
+                break
+
+            result_str = str(result)
+
             if invertExpectation:
-                if expectedStatus in result:
-                    print("STATUS confirmed NOT SUCCESSFUL for " + objectName)
-                else:
+                if expectedStatus not in result_str:
                     print("STATUS confirmed success for " + objectName)
                     isSuccessful = True
                     failuremessage = None
             else:
-                if expectedStatus in result:
+                if expectedStatus in result_str:
                     print("STATUS confirmed success for " + objectName)
                     isSuccessful = True
                     failuremessage = None
 
-            if ("503" in result or "Connection aborted" in result):
+            if "503" in result_str or "Connection aborted" in result_str:
                 print("503 error, retrying status check for " + objectName)
+                time.sleep(5)
             else:
-                break  # Exit loop if no 503 error
+                break
+        else:
+            break  # Not a 503 error, no recovery needed
 
     return isSuccessful, failuremessage
-
-def isCommandSuccessful(reply):
-    answer = StriimCommandResponse(reply[0]['command'], reply[0]['executionStatus'], reply[0]['responseCode'])
-
-    if answer.execution_status == 'Success':
-        return True
-    else:
-        return False
 
 def cleanNamespace(targetPath, namespace):
     for item in os.listdir(targetPath):
         path = os.path.join(targetPath, item)
-        if item.startswith(namespace) and os.path.isfile(path):
+        if item.startswith(namespace + '_') and os.path.isfile(path):
             os.remove(path)
 
 def getNewFile(sourcePath, sourceFileName, targetPath, queryText, targetTable, namespace):
+    os.makedirs(targetPath, exist_ok=True)
     fullPath = os.path.join(sourcePath, sourceFileName)
     with open(fullPath, "rt") as fin:
         content = fin.read()
@@ -806,39 +764,38 @@ def doNSClean():
 
 
 if __name__ == '__main__':
+    headers = authenticate()
+
+    log_dir = os.path.dirname(config.LOG_OUTPUT_PATH)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+
+    log_level = logging.DEBUG if os.environ.get('DEBUG') else logging.INFO
+    logging.basicConfig(filename=log_output_path, level=log_level, format='%(asctime)s:%(levelname)s:%(message)s')
 
     # Easy way to disable running
     run = True
 
-    firstRun = True
-
     if run:
-        # Normally, get latest status from BQ
-        if not firstRun:
-            query_results = update_and_get_current_status()
+        # Check BQ if there are any current runs with this runid
+        query_results = update_and_get_current_status()
 
-        # If it is the first run...
-        if firstRun:
-            # Check BQ if there are any current runs with this runid
-            query_results = update_and_get_current_status()
+        # If no results from BQ, load from file
+        if len(query_results) == 0:
+            query_results = read_csv_to_query_results()
 
-            # If no results from BQ, load from file
-            if len(query_results) == 0:
-                query_results = read_csv_to_query_results()
+            # Get next ID available
+            next_id = get_next_id()
+            # Assign IDs to new rows without IDs
+            for qr in query_results:
+                qr.id = next_id
+                qr.uniquerunid = config.UNIQUE_RUN_ID
+                qr.notes = ""
+                qr.status = "NEW"
+                next_id = next_id + 1
 
-                # Get next ID available
-                next_id = get_next_id()
-                # Assign IDs to new rows without IDs
-                for qr in query_results:
-                    qr.id = next_id
-                    qr.uniquerunid = config.UNIQUE_RUN_ID
-                    qr.notes = ""
-                    qr.status = "NEW"
-                    next_id = next_id + 1
-
-                # Persist these rows
-                write_data(query_results)
-            firstRun = False
+            # Persist these rows
+            write_data(query_results)
 
         continueRun = True
 

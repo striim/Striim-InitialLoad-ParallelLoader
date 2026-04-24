@@ -3,3 +3,4 @@ __pycache__
 logging/*.json
 logging/*.log
 stage/*.tql
+.worktrees/
