@@ -34,4 +34,3 @@ CREATE OR REPLACE TARGET OracleIL_Target USING Global.DatabaseWriter (
 INPUT FROM OracleIL_Output;
 
 END APPLICATION OracleInitialLoadApp;
-
