@@ -41,8 +41,8 @@ RUNNING_STATUSES = frozenset(['RUNNING'])
 NEW_EXCLUDES_STATUSES = frozenset(['RUNNING', 'COMPLETED', 'FAILED'])
 APP_RUNNING_STATUSES = frozenset(['RUNNING', 'QUIESCING', 'COMPLETED'])
 
-# Defines where to orchestrate. Currently supports BigQuery (BQ) or TinyDB (default: stores locally as a file):
-STAGE_DB_LOCATION = 'TinyDB' #Options: BQ or TinyDB
+# Defines where to orchestrate. Supports BigQuery (BQ), PostgreSQL (PG), or TinyDB (default: stores locally as a file):
+STAGE_DB_LOCATION = 'TinyDB' #Options: BQ, PG, or TinyDB
 TINYDB_PATH = os.path.join(BASE_PATH,'logging','current_position.json')
 
 DEPLOYMENT_GROUP_TARGET = 'default'
@@ -54,6 +54,7 @@ ENV = os.environ.get("ENV", "DEV")  # Read ENV from environment
 # Set them in your shell or in a .env file (loaded separately, e.g. with python-dotenv).
 # Required vars: STRIIM_NODE, STRIIM_ADMIN_USER, STRIIM_ADMIN_PWD (or STRIIM_API_TOKEN).
 # For BigQuery mode: BQ_KEYFILE_LOCATION, BQ_PROJECT_ID, BQ_DATASET_ID.
+# For PostgreSQL mode: PG_HOST, PG_PORT, PG_DATABASE, PG_USER, PG_PASSWORD.
 
 if ENV == "DEV":
 
@@ -79,6 +80,16 @@ if ENV == "DEV":
     BQ_DATASET_ID = os.environ.get("BQ_DATASET_ID", "")
     BQ_TABLE_ID = os.environ.get("BQ_TABLE_ID", "striim_orchestration")
 
+    # PostgreSQL Configuration
+    # Only needed if STAGE_DB_LOCATION='PG'
+    PG_HOST = os.environ.get("PG_HOST", "localhost")
+    PG_PORT = int(os.environ.get("PG_PORT", "5432"))
+    PG_DATABASE = os.environ.get("PG_DATABASE", "")
+    PG_USER = os.environ.get("PG_USER", "")
+    PG_PASSWORD = os.environ.get("PG_PASSWORD", "")
+    PG_TABLE_ID = os.environ.get("PG_TABLE_ID", "striim_orchestration")
+    PG_SSLMODE = os.environ.get("PG_SSLMODE", "prefer")
+
 
 elif ENV == "PROD":
     # PROD-specific settings
@@ -91,6 +102,16 @@ elif ENV == "PROD":
     BQ_PROJECT_ID = os.environ.get("BQ_PROJECT_ID", "")
     BQ_DATASET_ID = os.environ.get("BQ_DATASET_ID", "")
     BQ_TABLE_ID = os.environ.get("BQ_TABLE_ID", "striim_orchestration")
+
+    # PostgreSQL Configuration
+    # Only needed if STAGE_DB_LOCATION='PG'
+    PG_HOST = os.environ.get("PG_HOST", "localhost")
+    PG_PORT = int(os.environ.get("PG_PORT", "5432"))
+    PG_DATABASE = os.environ.get("PG_DATABASE", "")
+    PG_USER = os.environ.get("PG_USER", "")
+    PG_PASSWORD = os.environ.get("PG_PASSWORD", "")
+    PG_TABLE_ID = os.environ.get("PG_TABLE_ID", "striim_orchestration")
+    PG_SSLMODE = os.environ.get("PG_SSLMODE", "prefer")
 
     # These vars are inherited from the top-level config unless overridden here.
     # Override CONCURRENT_APPS_MAX or UNIQUE_RUN_ID here if needed for production.

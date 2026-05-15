@@ -34,7 +34,7 @@ generate TQL from template  →  CREATE app  →  DEPLOY  →  START
          UNDEPLOY  →  DROP  →  clean namespace  →  dispatch next slice
 ```
 
-State is persisted in TinyDB (local JSON) or BigQuery so runs can be interrupted and resumed.
+State is persisted in TinyDB (local JSON), BigQuery, or PostgreSQL so runs can be interrupted and resumed.
 
 ---
 
@@ -44,7 +44,11 @@ State is persisted in TinyDB (local JSON) or BigQuery so runs can be interrupted
 |------|---------|
 | `main.py` | Orchestrator — the only entry point you run |
 | `config.py` | All tunable settings; credentials are read from env vars |
-| `data.py` | State backend abstraction (TinyDB or BigQuery) |
+| `data.py` | State backend dispatch layer (routes to TinyDB, BigQuery, or PostgreSQL) |
+| `models.py` | `QueryResult` data class shared across all backends |
+| `data_tinydb.py` | TinyDB backend implementation |
+| `data_bq.py` | BigQuery backend implementation |
+| `data_pg.py` | PostgreSQL backend implementation |
 | `admin.SW.tql` | TQL application template with `~QUERYTEXT~` / `~TARGETTABLE~` placeholders |
 | `pvs.tql` | Property variable definitions for Striim (connection strings, credentials) |
 | `queryfile.txt` | Input: one `query\|target_table` line per slice |
@@ -52,6 +56,7 @@ State is persisted in TinyDB (local JSON) or BigQuery so runs can be interrupted
 | `make_assorted_queryfile.py` | Reorders `queryfile.txt` for better concurrency interleaving |
 | `oracle_rowsplit.sql` | Oracle SQL helper that generates ROWID-range slices for any table |
 | `BQ_TableCreate.sql` | DDL for the BigQuery orchestration table |
+| `PG_TableCreate.sql` | DDL for the PostgreSQL orchestration table (auto-created on first run) |
 
 ---
 
@@ -100,6 +105,21 @@ export BQ_KEYFILE_LOCATION="/path/to/service-account.json"
 export BQ_PROJECT_ID="your-project"
 export BQ_DATASET_ID="your-dataset"
 ```
+
+**PostgreSQL state backend (only needed if `STAGE_DB_LOCATION = 'PG'`):**
+
+```bash
+export PG_HOST="your-pg-host"
+export PG_DATABASE="your-database"
+export PG_USER="your-user"
+export PG_PASSWORD="your-password"
+# Optional — defaults shown:
+export PG_PORT="5432"
+export PG_TABLE_ID="striim_orchestration"
+export PG_SSLMODE="prefer"   # use "require" for managed PG (RDS, Cloud SQL, etc.)
+```
+
+The orchestration table is created automatically on first run. To create it manually, use `PG_TableCreate.sql`.
 
 **Optional overrides:**
 
@@ -215,7 +235,7 @@ All settings live in `config.py`. Credentials always come from environment varia
 | `CONCURRENT_APPS_MAX` | `5` | Maximum number of Striim apps running simultaneously |
 | `APP_MONITOR_INTERVAL_SECONDS` | `15` | How often to poll app status. Not recommended below 15s; 60s+ is typical for larger clusters |
 | `DEPLOY_WAIT_TIME_SECONDS` | `20` | Minimum pause between deploying successive apps, to avoid overwhelming Striim |
-| `STAGE_DB_LOCATION` | `TinyDB` | State backend: `TinyDB` (local JSON, zero setup) or `BQ` (BigQuery) |
+| `STAGE_DB_LOCATION` | `TinyDB` | State backend: `TinyDB` (local JSON, zero setup), `BQ` (BigQuery), or `PG` (PostgreSQL) |
 | `DEPLOYMENT_GROUP_TARGET` | `default` | Striim deployment group to use when deploying apps |
 | `ILA_APP_NAME_BASE` | `OracleInitialLoadApp` | App name inside each namespace — must match the name in your TQL template |
 | `LOG_OUTPUT_PATH` | `logging/striimautoloader.log` | Path for the log file |
@@ -253,6 +273,28 @@ The program loops until every slice reaches `COMPLETED` or `FAILED`, marks the r
 | `COMPLETED` | App quiesced or completed; undeploy and drop succeeded |
 | `COMPLETED-FAILEDDROP` | App completed but undeploy or drop failed; manual cleanup may be needed |
 | `FAILED` | An error occurred at create, deploy, or start; see `notes` for details |
+
+### PostgreSQL orchestration table
+
+Required when `STAGE_DB_LOCATION = 'PG'`. The table is created automatically on first run. To create it manually, use `PG_TableCreate.sql`.
+
+**Useful monitoring queries:**
+
+```sql
+-- Progress summary for the current run
+SELECT status, COUNT(*) AS cnt
+FROM striim_orchestration
+WHERE iscurrentrow = TRUE AND uniquerunid = 100
+GROUP BY status
+ORDER BY status;
+
+-- Slices still in flight or pending
+SELECT appname, targettbl, status, started_datetime, notes
+FROM striim_orchestration
+WHERE iscurrentrow = TRUE AND uniquerunid = 100
+  AND status NOT IN ('COMPLETED', 'FAILED')
+ORDER BY roworder;
+```
 
 ### BigQuery orchestration table
 
@@ -310,6 +352,20 @@ rm stage/*.tql
 ```bash
 # Windows
 del logging\*.json logging\*.log stage\*.tql
+```
+
+**PostgreSQL — retire a run without deleting history:**
+
+```sql
+UPDATE striim_orchestration
+SET iscurrentrow = FALSE
+WHERE iscurrentrow = TRUE AND uniquerunid = 100;
+```
+
+**PostgreSQL — full reset:**
+
+```sql
+TRUNCATE TABLE striim_orchestration;
 ```
 
 **BigQuery — retire a run without deleting history:**
