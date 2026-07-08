@@ -54,23 +54,24 @@ def _with_reconnect(func):
             global _pg_conn
             _pg_conn = None
             return func(*args, **kwargs)
+
     return wrapper
 
 
 def _row_to_query_result(row_dict):
     return QueryResult(
-        roworder=row_dict.get('roworder'),
-        _id=row_dict.get('id'),
-        uniquerunid=row_dict.get('uniquerunid'),
-        query=row_dict.get('query'),
-        appname=row_dict.get('appname'),
-        targettbl=row_dict.get('targettbl'),
-        status=row_dict.get('status'),
-        namespace=row_dict.get('namespace'),
-        started_datetime=row_dict.get('started_datetime'),
-        finished_datetime=row_dict.get('finished_datetime'),
-        notes=row_dict.get('notes'),
-        iscurrentrow=row_dict.get('iscurrentrow', False),
+        roworder=row_dict.get("roworder"),
+        _id=row_dict.get("id"),
+        uniquerunid=row_dict.get("uniquerunid"),
+        query=row_dict.get("query"),
+        appname=row_dict.get("appname"),
+        targettbl=row_dict.get("targettbl"),
+        status=row_dict.get("status"),
+        namespace=row_dict.get("namespace"),
+        started_datetime=row_dict.get("started_datetime"),
+        finished_datetime=row_dict.get("finished_datetime"),
+        notes=row_dict.get("notes"),
+        iscurrentrow=row_dict.get("iscurrentrow", False),
     )
 
 
@@ -80,10 +81,20 @@ def write_to_postgresql(query_results):
         return
     conn = get_pg_connection()
     rows = [
-        (r.id, r.roworder, r.uniquerunid, r.query,
-         r.appname or '', r.targettbl, r.status or '',
-         r.namespace or '', r.started_datetime, r.finished_datetime,
-         r.notes or '', r.iscurrentrow)
+        (
+            r.id,
+            r.roworder,
+            r.uniquerunid,
+            r.query,
+            r.appname or "",
+            r.targettbl,
+            r.status or "",
+            r.namespace or "",
+            r.started_datetime,
+            r.finished_datetime,
+            r.notes or "",
+            r.iscurrentrow,
+        )
         for r in query_results
     ]
     insert_sql = sql.SQL("""
@@ -147,15 +158,13 @@ def update_record_in_postgresql(query_result, return_output=False):
     fields = []
     values = []
     for attr, value in query_result.__dict__.items():
-        if attr != 'id' and value is not None:
+        if attr != "id" and value is not None:
             fields.append(sql.Identifier(attr))
             values.append(value)
     values.append(query_result.id)
     update_sql = sql.SQL("UPDATE {table} SET {assignments} WHERE id = %s").format(
         table=sql.Identifier(config.PG_TABLE_ID),
-        assignments=sql.SQL(', ').join(
-            sql.SQL("{} = %s").format(f) for f in fields
-        ),
+        assignments=sql.SQL(", ").join(sql.SQL("{} = %s").format(f) for f in fields),
     )
     with conn.cursor() as cur:
         cur.execute(update_sql, values)
@@ -177,7 +186,25 @@ def clear_runid_postgresql(uniquerunid):
             ).format(table=sql.Identifier(config.PG_TABLE_ID)),
             (uniquerunid,),
         )
-    print(f"Records with uniquerunid {uniquerunid} have been updated as iscurrentrow = FALSE")
+    print(
+        f"Records with uniquerunid {uniquerunid} have been updated as iscurrentrow = FALSE"
+    )
+
+
+@_with_reconnect
+def delete_runid_postgresql(uniquerunid):
+    if uniquerunid is None:
+        print("Problem, should not have empty uniquerunid")
+        raise NotImplementedError
+    conn = get_pg_connection()
+    with conn.cursor() as cur:
+        cur.execute(
+            sql.SQL(
+                "DELETE FROM {table} WHERE iscurrentrow = TRUE AND uniquerunid = %s"
+            ).format(table=sql.Identifier(config.PG_TABLE_ID)),
+            (uniquerunid,),
+        )
+    print(f"Deleted current rows for uniquerunid {uniquerunid}")
 
 
 @_with_reconnect

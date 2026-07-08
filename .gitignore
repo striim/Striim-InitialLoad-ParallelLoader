@@ -4,3 +4,4 @@ logging/*.json
 logging/*.log
 stage/*.tql
 .worktrees/
+.env

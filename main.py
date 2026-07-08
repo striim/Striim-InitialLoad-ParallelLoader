@@ -4,6 +4,9 @@ import requests
 import datetime
 import logging
 import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "loader"))
 
 import config
 
@@ -331,12 +334,13 @@ def runMon(component=''):
     return runCommand(data, True)
 
 # This determines if a particular app is part of this Initial Load Automater Appset
-def isILApp(full_name):
+def isILApp(full_name, ns_base=None):
+    base = ns_base if ns_base is not None else config.ILA_NS_BASE
     segments = full_name.split('.')
 
     if len(segments) == 2:
-        # Check if the first segment starts with 'abc'
-        if segments[0].startswith(config.ILA_NS_BASE):
+        # Check if the first segment starts with the run's namespace base
+        if segments[0].startswith(base):
             return True
     return False
 
@@ -733,12 +737,29 @@ def cleanNamespace(targetPath, namespace):
         if item.startswith(namespace + '_') and os.path.isfile(path):
             os.remove(path)
 
+# Map a configured DB engine (config.SOURCE_DB_TYPE / TARGET_DB_TYPE) to the exact
+# string Striim's DatabaseReader/DatabaseWriter expect for DatabaseProviderType.
+_STRIIM_PROVIDER = {"oracle": "Oracle", "postgres": "PostgreSQL", "postgresql": "PostgreSQL",
+                    "pg": "PostgreSQL", "sqlserver": "SQLServer", "mssql": "SQLServer"}
+
+def striim_provider_type(db_type, env_override=""):
+    if env_override:
+        return env_override
+    key = (db_type or "oracle").lower()
+    if key in _STRIIM_PROVIDER:
+        return _STRIIM_PROVIDER[key]
+    # jdbc / unknown: provider is source-specific — require an explicit override.
+    raise ValueError(f"No Striim DatabaseProviderType mapping for '{db_type}'. "
+                     f"Set STRIIM_SOURCE_PROVIDER_TYPE / STRIIM_TARGET_PROVIDER_TYPE.")
+
 def getNewFile(sourcePath, sourceFileName, targetPath, queryText, targetTable, namespace):
     os.makedirs(targetPath, exist_ok=True)
     fullPath = os.path.join(sourcePath, sourceFileName)
+    src_provider = striim_provider_type(config.SOURCE_DB_TYPE, os.environ.get("STRIIM_SOURCE_PROVIDER_TYPE", ""))
+    tgt_provider = striim_provider_type(config.TARGET_DB_TYPE, os.environ.get("STRIIM_TARGET_PROVIDER_TYPE", ""))
     with open(fullPath, "rt") as fin:
         content = fin.read()
-        modified_content = content.replace('~QUERYTEXT~', queryText).replace('~TARGETTABLE~', targetTable)
+        modified_content = content.replace('~QUERYTEXT~', queryText).replace('~TARGETTABLE~', targetTable).replace('~PROVIDER_TYPE_SRC~', src_provider).replace('~PROVIDER_TYPE_TGT~', tgt_provider)
 
     cleanNamespace(targetPath, namespace)
 
@@ -777,11 +798,35 @@ if __name__ == '__main__':
     run = True
 
     if run:
-        # Check BQ if there are any current runs with this runid
+        import sys
+        import run_safety
+
+        _force_fresh = ('--force-fresh' in sys.argv) or bool(os.environ.get('FORCE_FRESH'))
+
+        # Singleton run-lock: refuse a second concurrent loader on this run id.
+        _lock_ok, _lock_msg = run_safety.acquire_lock(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
+        print(_lock_msg)
+        if not _lock_ok:
+            sys.exit(1)
+
+        # Current rows for this run id from the state backend.
         query_results = update_and_get_current_status()
 
-        # If no results from BQ, load from file
-        if len(query_results) == 0:
+        # RESUME / FRESH / REFUSE from the row count + the run marker.
+        _qf_hash = run_safety.queryfile_hash(config.QUERY_FILE_PATH) if os.path.exists(config.QUERY_FILE_PATH) else ''
+        _marker = run_safety.read_marker(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
+        _decision, _reason = run_safety.decide_startup(
+            len(query_results), _marker, config.STAGE_DB_LOCATION, _qf_hash, _force_fresh
+        )
+        print('[startup] ' + _decision + ': ' + _reason)
+        if _decision == 'REFUSE':
+            run_safety.release_lock(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
+            sys.exit(1)
+
+        _lock_released = False
+
+        # FRESH path: (re)read the queryfile and deploy. (RESUME skips this.)
+        if _decision == 'FRESH':
             query_results = read_csv_to_query_results()
 
             # Get next ID available
@@ -797,6 +842,50 @@ if __name__ == '__main__':
             # Persist these rows
             write_data(query_results)
 
+            # Marker written AFTER write_data succeeds (a crash mid-fresh-start must not
+            # wedge the retry). Deleted on ALL_COMPLETE completion + in `manage.py clear`.
+            run_safety.write_marker(
+                config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID,
+                config.STAGE_DB_LOCATION, _qf_hash, len(query_results),
+            )
+
+            # Capture the source CDC watermark (SCN) ONCE at fresh-run start, for
+            # downstream CDC catch-up. Best-effort: a missing source connection or
+            # privilege must NEVER block the load.
+            import json as _json
+            import watermark as _watermark
+            _wm = None
+            try:
+                from source_dialect import get_dialect
+                _wdialect = get_dialect()
+                _wconn = _wdialect.get_connection()
+                try:
+                    _wm = _wdialect.capture_watermark(_wconn)
+                finally:
+                    _wconn.close()
+            except Exception as _werr:
+                logging.warning('Source watermark capture skipped (no source connection?): %s', _werr)
+            # Prefer the SCN captured at split time (before boundary discovery) when its
+            # queryfile matches — narrower CDC loss window. Else fall back to load-start.
+            _split_sidecar = None
+            try:
+                _sw_path = os.path.join(os.path.dirname(config.LOG_OUTPUT_PATH) or '.', 'split_watermark.json')
+                with open(_sw_path) as _swf:
+                    _split_sidecar = _json.load(_swf)
+            except (OSError, ValueError):
+                _split_sidecar = None
+            _wm, _used_split = _watermark.choose_watermark(_split_sidecar, _wm, config.QUERY_FILE)
+            if _used_split:
+                print('[watermark] reusing split-time SCN (narrower CDC loss window).')
+            else:
+                logging.warning('Using load-start SCN (no matching split sidecar) -- CDC loss window is wider.')
+            _wsrc = getattr(config, 'ORACLE_DSN', '') or getattr(config, 'ORACLE_HOST', '')
+            _wpath = _watermark.capture_and_log(_wm, config.UNIQUE_RUN_ID, _wsrc, config.LOG_OUTPUT_PATH)
+            if _wpath and _wm:
+                print(f"Initial Load start watermark [{_wm.get('label')}] = {_wm.get('value')}  (logged + sidecar {_wpath})")
+            else:
+                print('WARNING: source CDC watermark not captured -- set the CDC start point manually (see log).')
+
         continueRun = True
 
         # If no more results...
@@ -806,23 +895,95 @@ if __name__ == '__main__':
         logging.info('Logging Enabled. Storing at: ' + log_output_path)
         print('Logging Enabled. Storing at: ' + log_output_path)
 
-        while(continueRun):
-            print('Executing at', str(datetime.datetime.now()))
-            logging.info('Executing at ' + str(datetime.datetime.now()))
+        try:
+            while(continueRun):
+                print('Executing at', str(datetime.datetime.now()))
+                logging.info('Executing at ' + str(datetime.datetime.now()))
 
-            runReview()
+                runReview()
 
-            time.sleep(polling_interval_seconds)
+                # Stall-detect: a slice RUNNING longer than SLICE_MAX_RUNTIME_SECONDS
+                # (0 = disabled) never enters DONE_STATUSES and hangs the loop. Force it
+                # FAILED so the end-of-run gate surfaces it loudly.
+                import run_safety as _run_safety
+                _now = datetime.datetime.now()
+                _max_rt = getattr(config, 'SLICE_MAX_RUNTIME_SECONDS', 0)
+                for _qry in [q for q in query_results if q.status in config.RUNNING_STATUSES]:
+                    if _run_safety.is_stalled(_qry.started_datetime, _now, _max_rt):
+                        _qry.status = 'FAILED'
+                        _qry.notes = (_qry.notes or '') + ' [stalled > ' + str(_max_rt) + 's]'
+                        _qry.finished_datetime = _now
+                        try:
+                            update_record(_qry, True)
+                            print('[stall] slice #' + str(_qry.roworder) + ' marked FAILED (running > ' + str(_max_rt) + 's)')
+                        except Exception as _se:
+                            logging.warning('[stall] failed to persist stall-FAILED for slice #%s: %s', _qry.roworder, _se)
+                            _qry.status = 'RUNNING'
+                            _qry.notes = None
+                            _qry.finished_datetime = None
 
-            continueRun = False
+                time.sleep(polling_interval_seconds)
 
-            # If there are any not completed, we still continue
-            for qry in [qry for qry in query_results if qry.status not in config.DONE_STATUSES]:
-                continueRun = True
+                continueRun = False
 
-        runMessage = 'Run completed at ' + str(datetime.datetime.now())
+                # If there are any not completed, we still continue
+                for qry in [qry for qry in query_results if qry.status not in config.DONE_STATUSES]:
+                    continueRun = True
 
-        # will mark this run as completed in BQ
-        clear_runid(config.UNIQUE_RUN_ID)
-        logging.info(runMessage)
-        print(runMessage)
+            # End-of-run completeness gate. Re-read the CURRENT rows from the backend
+            # (don't trust the last in-memory poll) and judge with reconcile.final_verdict.
+            import sys
+            import reconcile
+            import run_safety as _run_safety
+
+            _final_rows = update_and_get_current_status()
+            _verdict = reconcile.final_verdict(_final_rows)
+            if _verdict != 'ALL_COMPLETE':
+                _off = reconcile.offending_counts(_final_rows)
+                _only_faileddrop = set(_off.keys()) <= {'COMPLETED-FAILEDDROP'}
+                if _only_faileddrop:
+                    # Data transferred; only post-transfer cleanup (undeploy/drop) failed.
+                    # Clear the run so the next invocation doesn't loop forever on rows
+                    # that can never reach COMPLETED. Operator must clean up apps manually.
+                    banner = (
+                        '\n' + '!' * 64 + '\n'
+                        + ' RUN ' + str(config.UNIQUE_RUN_ID) + ' COMPLETED WITH CLEANUP FAILURES: ' + _verdict + '\n'
+                        + ' COMPLETED-FAILEDDROP slices (data transferred, cleanup failed): ' + str(_off) + '\n'
+                        + ' Run cleared. Manually undeploy/drop the listed apps and namespaces.\n'
+                        + '!' * 64
+                    )
+                    logging.warning(banner)
+                    print(banner)
+                    clear_runid(config.UNIQUE_RUN_ID)
+                    _run_safety.delete_marker(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
+                    _lock_released = True
+                    _run_safety.release_lock(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
+                    sys.exit(1)
+                banner = (
+                    '\n' + '!' * 64 + '\n'
+                    + ' RUN ' + str(config.UNIQUE_RUN_ID) + ' DID NOT COMPLETE CLEANLY: ' + _verdict + '\n'
+                    + ' non-COMPLETED slices: ' + str(_off) + '\n'
+                    + ' Run NOT cleared (iscurrentrow kept). Inspect, then reset / reconcile / resume.\n'
+                    + '!' * 64
+                )
+                logging.error(banner)
+                print(banner)
+                _lock_released = True
+                _run_safety.release_lock(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
+                sys.exit(1)
+
+            runMessage = (
+                'Run completed: all ' + str(len(_final_rows)) + ' slices COMPLETED at '
+                + str(datetime.datetime.now())
+                + ' -- run `python manage.py reconcile` to confirm row counts.'
+            )
+            clear_runid(config.UNIQUE_RUN_ID)
+            _run_safety.delete_marker(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
+            _lock_released = True
+            _run_safety.release_lock(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
+            logging.info(runMessage)
+            print(runMessage)
+        finally:
+            if not _lock_released:
+                import run_safety as _run_safety
+                _run_safety.release_lock(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)

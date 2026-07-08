@@ -12,7 +12,9 @@ _bq_client = None
 def get_bq_client():
     global _bq_client
     if _bq_client is None:
-        _bq_client = bigquery.Client.from_service_account_json(config.BQ_KEYFILE_LOCATION)
+        _bq_client = bigquery.Client.from_service_account_json(
+            config.BQ_KEYFILE_LOCATION
+        )
     return _bq_client
 
 
@@ -24,10 +26,15 @@ def write_to_bigquery(query_results):
 
     schar = "'"
 
-    union_all_query = " UNION ALL ".join([
-        f"SELECT {result.id} AS id, {result.roworder} AS roworder, {result.uniquerunid} AS uniquerunid, '{result.query}' AS query, '{result.appname if result.appname else ''}' AS appname, '{result.targettbl}' AS targettbl, '{result.status if result.status else ''}' AS status, '{result.namespace if result.namespace else ''}' AS namespace, {(schar + result.started_datetime.strftime('%Y-%m-%d %H:%M:%S.%f') + schar) if result.started_datetime else 'CAST(NULL AS TIMESTAMP)'} AS started_datetime, {(schar + result.finished_datetime.strftime('%Y-%m-%d %H:%M:%S.%f') + schar) if result.finished_datetime else 'CAST(NULL AS TIMESTAMP)'} AS finished_datetime, '{result.notes if result.notes else ''}' AS notes, {'TRUE' if result.iscurrentrow else 'FALSE'} AS iscurrentrow"
-        for result in query_results
-    ])
+    def _esc(v):
+        return (v or "").replace("'", "''")
+
+    union_all_query = " UNION ALL ".join(
+        [
+            f"SELECT {result.id} AS id, {result.roworder} AS roworder, {result.uniquerunid} AS uniquerunid, '{_esc(result.query)}' AS query, '{_esc(result.appname)}' AS appname, '{_esc(result.targettbl)}' AS targettbl, '{_esc(result.status)}' AS status, '{_esc(result.namespace)}' AS namespace, {(schar + result.started_datetime.strftime('%Y-%m-%d %H:%M:%S.%f') + schar) if result.started_datetime else 'CAST(NULL AS TIMESTAMP)'} AS started_datetime, {(schar + result.finished_datetime.strftime('%Y-%m-%d %H:%M:%S.%f') + schar) if result.finished_datetime else 'CAST(NULL AS TIMESTAMP)'} AS finished_datetime, '{_esc(result.notes)}' AS notes, {'TRUE' if result.iscurrentrow else 'FALSE'} AS iscurrentrow"
+            for result in query_results
+        ]
+    )
 
     merge_query = f"""
             MERGE INTO `{table_id}` T
@@ -122,14 +129,15 @@ def update_record_in_bigquery(query_result, return_output=False):
 
     update_fields = []
     for attr, value in query_result.__dict__.items():
-        if attr != 'id' and value is not None:
+        if attr != "id" and value is not None:
             if isinstance(value, datetime.datetime):
                 value = f"CAST('{value.strftime('%Y-%m-%d %H:%M:%S.%f')}' AS TIMESTAMP)"
                 update_fields.append(f"{attr} = {value}")
             elif isinstance(value, (int, float)):
                 update_fields.append(f"{attr} = {value}")
             else:
-                update_fields.append(f"{attr} = '{value}'")
+                escaped = str(value).replace("'", "''")
+                update_fields.append(f"{attr} = '{escaped}'")
 
     update_query = f"""
         UPDATE `{table_id}`
@@ -140,7 +148,9 @@ def update_record_in_bigquery(query_result, return_output=False):
     query_job = client.query(update_query)
     query_job.result()
 
-    print(f"Record with ID {query_result.id} has been updated: SELECT * FROM `{table_id}` WHERE id = {query_result.id}")
+    print(
+        f"Record with ID {query_result.id} has been updated: SELECT * FROM `{table_id}` WHERE id = {query_result.id}"
+    )
 
     if return_output:
         return fetch_record_from_bigquery(query_result.id)
@@ -163,7 +173,28 @@ def clear_runid_bigquery(uniquerunid):
     query_job = client.query(update_query)
     query_job.result()
 
-    print(f"Records with uniquerunid {uniquerunid} has been updated as iscurrentrow = FALSE")
+    print(
+        f"Records with uniquerunid {uniquerunid} has been updated as iscurrentrow = FALSE"
+    )
+
+
+def delete_runid_bigquery(uniquerunid):
+    client = get_bq_client()
+    table_id = f"{config.BQ_PROJECT_ID}.{config.BQ_DATASET_ID}.{config.BQ_TABLE_ID}"
+
+    if uniquerunid is None:
+        print("Problem, should not have empty uniquerunid")
+        raise NotImplementedError
+
+    delete_query = f"""
+        DELETE FROM `{table_id}`
+        WHERE iscurrentrow = TRUE AND uniquerunid = {uniquerunid}
+    """
+
+    query_job = client.query(delete_query)
+    query_job.result()
+
+    print(f"Deleted current rows for uniquerunid {uniquerunid}")
 
 
 def read_from_bigquery(where_clause) -> List[QueryResult]:
@@ -181,18 +212,20 @@ def read_from_bigquery(where_clause) -> List[QueryResult]:
 
     query_result_objects = []
     for row in results:
-        query_result_objects.append(QueryResult(
-            roworder=row.roworder,
-            _id=row.id,
-            uniquerunid=row.uniquerunid,
-            query=row.query,
-            appname=row.appname,
-            targettbl=row.targettbl,
-            status=row.status,
-            namespace=row.namespace,
-            started_datetime=row.started_datetime,
-            finished_datetime=row.finished_datetime,
-            notes=row.notes,
-            iscurrentrow=row.iscurrentrow,
-        ))
+        query_result_objects.append(
+            QueryResult(
+                roworder=row.roworder,
+                _id=row.id,
+                uniquerunid=row.uniquerunid,
+                query=row.query,
+                appname=row.appname,
+                targettbl=row.targettbl,
+                status=row.status,
+                namespace=row.namespace,
+                started_datetime=row.started_datetime,
+                finished_datetime=row.finished_datetime,
+                notes=row.notes,
+                iscurrentrow=row.iscurrentrow,
+            )
+        )
     return query_result_objects

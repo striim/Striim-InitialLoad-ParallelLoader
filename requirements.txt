@@ -23,3 +23,14 @@ rsa==4.9
 six==1.17.0
 tinydb==4.8.2
 urllib3==2.3.0
+# Splitter only (manage.sh split). Kept out of the base install because some
+# PyPI mirrors don't carry it and it must never block the tests / state commands
+# (it is lazy-imported). Install separately when you need splitting:
+#   pip install python-oracledb
+#
+# Source-engine drivers (install only the engine(s) you probe/split against):
+# psycopg2-binary   # Postgres source (already required above for the PG state backend)
+# pyodbc            # SQL Server source (also needs an ODBC driver, e.g. "ODBC Driver 18 for SQL Server")
+# JayDeBeApi        # Generic JDBC source (needs JPype1 + Java on PATH)
+# JPype1            # Generic JDBC source
+# python-oracledb   # Oracle source (thin mode; no Instant Client needed)

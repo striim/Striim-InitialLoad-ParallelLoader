@@ -1,0 +1,5 @@
+# Test-only dependencies (not needed to run the loader or manage.sh).
+#   pip install -r requirements-dev.txt
+# If your pip mirror lacks pytest, force the public index:
+#   pip install pytest --index-url https://pypi.org/simple
+pytest

@@ -1,7 +1,11 @@
 use admin;
 create or replace propertyvariable SourceConnectionString="jdbc:oracle:thin:@YOUR_SOURCE_HOST:1521:YOUR_SID";
+-- PostgreSQL source example: jdbc:postgresql://HOST:5432/DB
+-- SQL Server source example:  jdbc:sqlserver://HOST:1433;databaseName=DB
 create or replace propertyvariable SourceUsername="YOUR_SOURCE_USERNAME";
 create or replace propertyvariable SourcePassword="YOUR_SOURCE_PASSWORD";
 create or replace propertyvariable TargetConnectionString="jdbc:oracle:thin:@YOUR_TARGET_HOST:1521:YOUR_SID";
+-- PostgreSQL target example: jdbc:postgresql://HOST:5432/DB
+-- SQL Server target example:  jdbc:sqlserver://HOST:1433;databaseName=DB
 create or replace propertyvariable TargetUsername="YOUR_TARGET_USERNAME";
 create or replace propertyvariable TargetPassword="YOUR_TARGET_PASSWORD";
