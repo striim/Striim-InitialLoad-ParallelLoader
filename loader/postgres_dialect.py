@@ -11,6 +11,7 @@ both are WHERE predicates injected at ~SPLIT~. Partition splitting stays in the
 existing split path, so render_predicate never handles partitions.
 """
 
+import dataclasses
 import datetime
 import json
 from decimal import Decimal
@@ -188,7 +189,10 @@ class PostgresDialect(SourceDialect):
                 cur.execute("EXPLAIN (FORMAT JSON) " + sql)
                 row = cur.fetchone()
             plan_json = row[0] if row else None
-            return self._summarize_plan(plan_json)
+            summary = self._summarize_plan(plan_json)
+            if summary.access_path == "Seq Scan":
+                summary = self._annotate_partition_pruning(conn, plan_json, summary)
+            return summary
         except Exception:  # noqa: BLE001 - probe must survive an EXPLAIN failure
             return PlanSummary(
                 access_path="(EXPLAIN unavailable)",
@@ -237,6 +241,47 @@ class PostgresDialect(SourceDialect):
                 raw=raw or "",
             )
 
+    def _annotate_partition_pruning(self, conn, plan_json, summary):
+        """A Seq Scan that reads only some leaf partitions was pruned to the slice.
+
+        Counts the leaf partitions under the root of the first seq-scanned relation;
+        when the plan scans fewer, the access is disjoint and is reported as
+        "Seq Scan (k of N partitions)". Relations are matched by name (EXPLAIN
+        without VERBOSE omits the schema). Never raises; returns ``summary``
+        unchanged when the table is not partitioned or nothing was pruned.
+        """
+        try:
+            if isinstance(plan_json, (bytes, bytearray)):
+                plan_json = plan_json.decode("utf-8", "replace")
+            data = json.loads(plan_json) if isinstance(plan_json, str) else plan_json
+            top = data[0] if isinstance(data, list) and data else data
+            plan = top.get("Plan", top) if isinstance(top, dict) else {}
+            rels = sorted({
+                n.get("Relation Name")
+                for n in self._walk(plan)
+                if n.get("Node Type") == "Seq Scan" and n.get("Relation Name")
+            })
+            if not rels:
+                return summary
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT count(*) FROM pg_partition_tree(pg_partition_root("
+                    "(SELECT c.oid FROM pg_class c WHERE c.relname = %s "
+                    "AND c.relispartition LIMIT 1))) t WHERE t.isleaf",
+                    (rels[0],),
+                )
+                row = cur.fetchone()
+            total = int(row[0]) if row and row[0] is not None else 0
+            if total > len(rels):
+                return dataclasses.replace(
+                    summary,
+                    access_path=f"Seq Scan ({len(rels)} of {total} partitions)",
+                    is_disjoint=True,
+                )
+        except Exception:  # noqa: BLE001 - annotation is best-effort
+            pass
+        return summary
+
     @staticmethod
     def _walk(node):
         """Yield this plan node and all nested child nodes (depth-first, top first)."""
@@ -256,11 +301,12 @@ class PostgresDialect(SourceDialect):
 
     @staticmethod
     def _is_disjoint_node(node_type):
-        """True for Index/Tid (range/seek) scans; False for a Seq Scan."""
+        """True for Index/Tid (range/seek) and Bitmap Heap (bitmap index range)
+        scans; False for a Seq Scan."""
         nt = (node_type or "").lower()
         if "seq scan" in nt:
             return False
-        return ("index" in nt) or ("tid" in nt)
+        return ("index" in nt) or ("tid" in nt) or ("bitmap heap" in nt)
 
     def _collect_full_scans(self, plan):
         """Relations seq-scanned with a large estimated row count (amplification)."""

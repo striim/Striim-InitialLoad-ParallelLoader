@@ -165,13 +165,21 @@ def discover_split_columns(conn, owner, table):
 # physical (ctid) page ranges
 # ---------------------------------------------------------------------------
 def relpages(conn, owner, table):
-    """pg_class.relpages (planner page estimate) for owner.table; 0 if unknown."""
+    """pg_class.relpages (planner page estimate) for owner.table; 0 if unknown.
+
+    A partitioned parent has no storage of its own, so the largest leaf
+    partition's relpages is used: a ctid band is evaluated in each partition's
+    own page space, so bands over [0, max leaf pages) cover every partition.
+    pg_partition_tree returns no rows for a plain table, so the table's own row is
+    included too. Needs PostgreSQL 12+.
+    """
     schema = _schema(owner)
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT c.relpages FROM pg_class c "
-            "JOIN pg_namespace n ON n.oid = c.relnamespace "
-            "WHERE n.nspname = %s AND c.relname = %s",
+            "WITH r AS (SELECT to_regclass(quote_ident(%s) || '.' || quote_ident(%s)) AS oid) "
+            "SELECT COALESCE(MAX(c.relpages), 0) FROM r JOIN pg_class c "
+            "ON c.oid = r.oid "
+            "OR c.oid IN (SELECT t.relid FROM pg_partition_tree(r.oid) t WHERE t.isleaf)",
             (schema, table),
         )
         row = cur.fetchone()
@@ -267,11 +275,19 @@ def column_range_boundaries(conn, owner, table, col, n):
 # sizing
 # ---------------------------------------------------------------------------
 def segment_size_bytes(conn, owner, table):
-    """Main-fork on-disk size in bytes via pg_relation_size (table+schema bound)."""
+    """Main-fork on-disk size in bytes via pg_relation_size (table+schema bound).
+
+    A partitioned parent is measured as the sum of its leaf partitions (the
+    parent itself has no storage). pg_partition_tree returns no rows for a plain
+    table, so the table's own row is included too. Needs PostgreSQL 12+.
+    """
     schema = _schema(owner)
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT pg_relation_size(quote_ident(%s) || '.' || quote_ident(%s))",
+            "WITH r AS (SELECT to_regclass(quote_ident(%s) || '.' || quote_ident(%s)) AS oid) "
+            "SELECT COALESCE(SUM(pg_relation_size(c.oid)), 0) FROM r JOIN pg_class c "
+            "ON c.oid = r.oid "
+            "OR c.oid IN (SELECT t.relid FROM pg_partition_tree(r.oid) t WHERE t.isleaf)",
             (schema, table),
         )
         row = cur.fetchone()

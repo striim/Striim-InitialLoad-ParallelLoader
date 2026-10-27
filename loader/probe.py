@@ -78,6 +78,7 @@ def _is_good(result):
         and result.plan is not None
         and result.plan.is_disjoint
         and not result.plan.full_scans
+        and result.timing.rows > 0
     )
 
 
@@ -112,14 +113,30 @@ def concurrency_knee(samples, min_gain=0.10):
 
 
 def _verdict(result):
-    """good | AMPLIFYING | failed — for the per-candidate table."""
+    """good | AMPLIFYING | non-disjoint | empty-sample | failed — for the per-candidate table."""
     if result.timing is None or result.plan is None:
         return "failed"
     if result.plan.full_scans:
         return "AMPLIFYING"
     if not result.plan.is_disjoint:
         return "non-disjoint"
+    if result.timing.rows == 0:
+        return "empty-sample"
     return "good"
+
+
+def empty_sample_warnings(results):
+    """One warning per candidate whose sampled slice returned no rows.
+
+    An empty first slice (a skewed key whose lowest value fills the first cut, or a
+    query filter that excludes it) measures nothing, so the candidate is not ranked.
+    """
+    return [
+        f"EMPTY SAMPLE: candidate {r.candidate.label!r} returned no rows in its first "
+        "slice (skewed key or filtered range); throughput not measured, not ranked."
+        for r in results
+        if r.timing is not None and r.timing.rows == 0
+    ]
 
 
 def format_recommendation(rec):
@@ -495,6 +512,7 @@ def run_probe(
                     f"AMPLIFYING: candidate {r.candidate.label!r} full-scans "
                     f"{', '.join(r.plan.full_scans)} (join amplification)."
                 )
+        warnings.extend(empty_sample_warnings(results))
 
         strategy = "rowid" if winner.candidate.kind == "physical" else "column"
         return Recommendation(
