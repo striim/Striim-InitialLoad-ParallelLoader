@@ -156,8 +156,8 @@ def test_base_is_snapshot_lost_default_false():
 
 def test_base_parse_owner_table_generic():
     # generic default: split on the last '.', no upper-casing
-    assert _StubDialect().parse_owner_table("pay.cm_fb") == ("pay", "cm_fb")
-    assert _StubDialect().parse_owner_table("CM_FB") == (None, "CM_FB")
+    assert _StubDialect().parse_owner_table("sales.orders") == ("sales", "orders")
+    assert _StubDialect().parse_owner_table("ORDERS") == (None, "ORDERS")
 
 
 def test_base_parse_owner_table_rejects_bad_ident():

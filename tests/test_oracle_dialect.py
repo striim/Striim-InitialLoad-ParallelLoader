@@ -405,7 +405,7 @@ def test_is_snapshot_lost_false_for_other(d):
 
 def test_parse_owner_table_uppercases(d):
     # Oracle delegates to oracle_boundaries: upper-cases and allows $ / #.
-    assert d.parse_owner_table("pay.cm_fb") == ("PAY", "CM_FB")
+    assert d.parse_owner_table("sales.orders") == ("SALES", "ORDERS")
 
 
 def test_parallel_hint_emits_oracle_hint(d):

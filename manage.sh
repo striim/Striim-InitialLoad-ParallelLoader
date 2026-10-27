@@ -117,7 +117,7 @@ prompt_owner_table() {
     read -rp "$prompt" val
     [[ -z "$val" ]] && { PROMPT_RESULT=""; return 1; }
     [[ "$val" =~ $re ]] && { PROMPT_RESULT="$val"; return 0; }
-    print_warning "Enter as OWNER.TABLE (e.g. PAY.CM_CASES) — letters, digits, _ \$ # only. Blank to cancel."
+    print_warning "Enter as OWNER.TABLE (e.g. SALES.ORDERS) — letters, digits, _ \$ # only. Blank to cancel."
   done
 }
 

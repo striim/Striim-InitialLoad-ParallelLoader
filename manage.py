@@ -1389,7 +1389,7 @@ def main(argv=None):
             if "table" in str(e).lower():
                 print(
                     "  Pass the driving table as OWNER.TABLE "
-                    "(e.g. PAY.CM_CASES, not CM_CASES).",
+                    "(e.g. SALES.ORDERS, not ORDERS).",
                     file=sys.stderr,
                 )
             else:
