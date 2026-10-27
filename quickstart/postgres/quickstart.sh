@@ -87,25 +87,20 @@ loader() {
     (cd "$RUN_DIR" && "$LOADER_PY" "$LOADER_HOME/manage.py" "$@")
 }
 
-# True when a live main.py holds the run lock (run/logging/run_<id>.lock, JSON with "pid").
-loader_running() {
-    "$LOADER_PY" - "$RUN_DIR/logging" <<'PY'
-import glob, json, os, sys
-for path in glob.glob(os.path.join(sys.argv[1], "run_*.lock")):
-    try:
-        pid = int(json.load(open(path)).get("pid") or 0)
-    except (OSError, ValueError, TypeError):
-        continue
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        continue
-    except OSError:
-        sys.exit(0)  # exists but not ours to signal: still running
-    if pid > 0:
-        sys.exit(0)
-sys.exit(1)
+# Exit 1 when a live loader holds this run's lock. Uses the loader's own lock logic
+# (pid plus process start time), so a stale lock left by a crash does not count.
+loader_lock_free() {
+    (cd "$RUN_DIR" && "$LOADER_PY" - "$LOADER_HOME" <<'PY'
+import os, sys
+sys.path[:0] = [sys.argv[1], os.path.join(sys.argv[1], "loader")]
+import config, run_safety
+ok, msg = run_safety.acquire_lock(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
+if not ok:
+    print(msg, file=sys.stderr)
+    sys.exit(1)
+run_safety.release_lock(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
 PY
+    )
 }
 
 # Run a ~SPLIT~ query once with the placeholder replaced by TRUE, so every probe
@@ -227,28 +222,17 @@ stage_split() {
 }
 
 stage_load() {
-    local keep="${1:-}"
     say "load: one Striim app per slice, 5 at a time (watch http://localhost:9080)"
     [ -s "$RUN_DIR/queryfile.txt" ] && [ -f "$LOAD_QUERY" ] || die "no slices: run ./quickstart.sh split"
-    # Decide before touching the target. A running loader owns the run; a previous run's
-    # rows mean main.py will RESUME it, and completed slices are not replayed, so their
-    # target rows must stay. Only a run with no loader rows starts from an empty target.
-    if loader_running; then
-        die "a load is already running (lock in run/logging/); wait for it to finish"
-    fi
-    local prior
-    prior=$(loader status 2> /dev/null | sed -n 's/^  counts: //p')
-    if [ -n "$prior" ] && [ "$prior" != "(none)" ]; then
-        echo "  previous loader run found ($prior): resuming it and keeping the target rows."
-        echo "  For a fresh load, run ./quickstart.sh clean first."
-        keep=--keep-target
-    fi
-    if [ "$keep" != "--keep-target" ]; then
-        psql_in "$TGT_DB" -c "TRUNCATE demo.orders"
-    fi
+    # load never empties the target. main.py takes the run lock and decides FRESH, RESUME
+    # or REFUSE itself; a resumed run keeps its completed slices' rows. clean empties it.
     local t0=$SECONDS log="$RUN_DIR/logging/load.log" pid rc last="" now
     mkdir -p "$RUN_DIR/logging"
     echo "  orchestrator output: run/logging/load.log"
+    pid=""
+    # A background job ignores Ctrl-C in a script, so pass it on: stop the loader too.
+    trap 'kill "$pid" 2> /dev/null; wait "$pid" 2> /dev/null || true
+          die "load stopped. Run ./quickstart.sh load to resume it, or clean for a fresh load"' INT TERM
     (cd "$RUN_DIR" && exec "$LOADER_PY" "$LOADER_HOME/main.py") > "$log" 2>&1 &
     pid=$!
     # Print the loader's slice counts each time they change.
@@ -261,6 +245,7 @@ stage_load() {
         sleep 5
     done
     rc=0; wait "$pid" || rc=$?
+    trap - INT TERM
     grep -E "Run completed|DID NOT COMPLETE|non-COMPLETED" "$log" | sed 's/^/  /' || true
     [ "$rc" = 0 ] || die "load failed (exit $rc); see run/logging/load.log"
     echo "load finished in $((SECONDS - t0))s"
@@ -287,6 +272,7 @@ stage_reconcile() {
 stage_clean() {
     local all="${1:-}"
     say "clean: retire loader run, remove ILA_ apps, empty the target"
+    loader_lock_free || die "a load is running; stop it (Ctrl-C in its terminal) before clean"
     loader clear --with-striim-cleanup --yes || true
     rm -f "$RUN_DIR/queryfile.txt" "$LOAD_QUERY"
     if [ "$all" = "--all" ]; then
@@ -415,7 +401,7 @@ Stages:
   probe [N]  run the probe scenarios (or only scenario N, 1-4)
   pvs        set the Striim property variables from run/pvs.tql
   split      split the load query into run/queryfile.txt
-  load       run the parallel load through Striim (--keep-target to skip TRUNCATE)
+  load       run the parallel load through Striim (never empties the target; see clean)
   reconcile  compare source and target row counts
   clean      retire the run and its Striim apps, empty the target (--all: drop databases)
 

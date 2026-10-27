@@ -50,12 +50,12 @@ on a laptop.
 | `pvs` | Sets the Striim property variables in `run/pvs.tql`. |
 | `probe` | Runs the four scenarios below. Panels are saved in `run/logging/probe-*.txt`. |
 | `split` | Splits the load query (orders in regions 1 to N; see `LOAD_ROWS`) into `LOAD_CHUNKS` `order_id` ranges plus one `IS NULL` slice, in `run/queryfile.txt`. |
-| `load` | Runs `main.py`: one Striim app per slice, 5 at a time, each created, deployed, started, monitored and dropped. Watch them at http://localhost:9080 (`admin` / `striim`). |
+| `load` | Runs `main.py`: one Striim app per slice, 5 at a time, each created, deployed, started, monitored and dropped. Watch them at http://localhost:9080 (`admin` / `striim`). Never empties the target; an interrupted run resumes. |
 | `reconcile` | Compares source and target counts and checks for duplicate keys. |
 | `check` | Shows whether the databases exist, their row counts and sizes. |
-| `clean` | Retires the loader run, drops any leftover `ILA_*` apps and empties the target. `clean --all` also drops both databases. |
+| `clean` | Retires the loader run, drops any leftover `ILA_*` apps and empties the target; refuses while a load is running. `clean --all` also drops both databases. |
 
-Any stage runs on its own: `./quickstart.sh probe 3`, `./quickstart.sh load --keep-target`.
+Any stage runs on its own: `./quickstart.sh probe 3`, `./quickstart.sh load`.
 
 ## The probe scenarios
 
@@ -146,12 +146,12 @@ load finished in 376s
   RECONCILED
 ```
 
-`load` empties the target first only when the loader has no rows for the run. If a previous run
-was interrupted, `load` resumes it and keeps the target rows (completed slices are not run
-again); for a fresh load, run `./quickstart.sh clean` first. It refuses to start while another
-load is running.
+`load` never empties the target. The loader takes the run lock and decides itself whether to
+start fresh, resume an interrupted run (completed slices are not run again, and their rows stay)
+or refuse. For a fresh load, run `./quickstart.sh clean` first: it retires the loader run, drops
+leftover apps and empties the target, and it refuses while a load is running.
 
-Running `load --keep-target` again over a full target adds nothing. The template ignores
+Running `load` again over a full target adds nothing. The template ignores
 `DUPLICATE_ROW_EXISTS`, and the target has a primary key.
 
 ## Options
