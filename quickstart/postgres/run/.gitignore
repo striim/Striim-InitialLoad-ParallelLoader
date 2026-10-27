@@ -1,0 +1,6 @@
+.env
+logging/
+stage/
+queryfile.txt
+queryfile-assorted.txt
+load_query.sql

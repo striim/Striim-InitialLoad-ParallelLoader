@@ -1,0 +1,42 @@
+-- One slice app: quickstart/postgres/run/admin.SW.tql (the loader's template) with its
+-- tokens filled the way main.py fills them for a Postgres source and target:
+--   ~QUERYTEXT~        one column-range slice (ids 1-25 of 50)
+--   ~TARGETTABLE~      the owned target table
+--   ~PROVIDER_TYPE_*~  Postgres
+-- Credentials come from the framework instead of property variables.
+CREATE NAMESPACE ${NS};
+USE ${NS};
+
+CREATE OR REPLACE APPLICATION ${APP};
+
+CREATE OR REPLACE SOURCE OracleInitialLoad USING Global.DatabaseReader (
+  FetchSize: 100,
+  QuiesceOnILCompletion: true,
+  Tables: '',
+  Password: '${PG_SOURCE_PASSWORD}',
+  Query: "SELECT s.* FROM ${PG_SOURCE_SCHEMA}.${TID}src s WHERE s.id >= 1 AND s.id < 26",
+  DatabaseProviderType: 'Postgres',
+  Username: '${PG_SOURCE_USER}',
+  ConnectionURL: '${PG_URL}' )
+OUTPUT TO OracleIL_Output;
+
+CREATE OR REPLACE TARGET OracleIL_Target USING Global.DatabaseWriter (
+  ConnectionURL: '${PG_URL}',
+  ConnectionRetryPolicy: 'retryInterval=30, maxRetries=3',
+  Tables: 'QUERY,${PG_TARGET_SCHEMA}.${TID}tgt',
+  DatabaseProviderType: 'Postgres',
+  CheckPointTable: '${PG_TARGET_SCHEMA}.${TID}chkpoint',
+  CDDLAction: 'Process',
+  BatchPolicy: 'EventCount:100,Interval:10',
+  IgnorableExceptionCode: 'DUPLICATE_ROW_EXISTS',
+  StatementCacheSize: '50',
+  CommitPolicy: 'EventCount:100,Interval:10',
+  Username: '${PG_TARGET_USER}',
+  PreserveSourceTransactionBoundary: 'false',
+  Password: '${PG_TARGET_PASSWORD}' )
+INPUT FROM OracleIL_Output;
+
+END APPLICATION ${APP};
+
+DEPLOY APPLICATION ${APP};
+START APPLICATION ${APP};

@@ -1,0 +1,5 @@
+CREATE TABLE ${TID}tgt (
+  id INTEGER PRIMARY KEY,
+  amount NUMERIC(12, 2) NOT NULL,
+  created_at TIMESTAMP NOT NULL
+);

@@ -110,6 +110,17 @@ def map_mon_json_response(json_response):
 
     # --- Section 1: Striim Applications (determines global response_valid) ---
     try:
+        # A cluster with no applications answers {"message": "No applications"} instead of
+        # an empty list (seen on 5.0.6.0C). That exact answer, in a successful response,
+        # means no apps. Any other message (an error, a failed collection) stays invalid.
+        if (parsed_json and isinstance(parsed_json, list) and len(parsed_json) > 0 and
+                isinstance(parsed_json[0], dict) and
+                parsed_json[0].get("executionStatus", "Success") == "Success" and
+                isinstance(parsed_json[0].get("output"), dict)):
+            apps_field = parsed_json[0]["output"].get("striimApplications")
+            if (isinstance(apps_field, dict) and set(apps_field) == {"message"} and
+                    str(apps_field["message"]).strip().lower() == "no applications"):
+                parsed_json[0]["output"]["striimApplications"] = []
         # Basic structural validation for striimApplications path
         if not (parsed_json and isinstance(parsed_json, list) and len(parsed_json) > 0 and
                 isinstance(parsed_json[0], dict) and "output" in parsed_json[0] and

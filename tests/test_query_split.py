@@ -2,71 +2,71 @@ import pytest
 import query_split as qs
 
 JOIN = (
-    "SELECT s.A FROM PAY.CM_FB_SUBMISSION s "
-    "JOIN PAY.CM_FB_SUBMSN_RESP r ON r.T = s.T "
-    "WHERE s.ENTITY_TYPE = 'CASE' AND ~SPLIT~"
+    "SELECT s.A FROM SALES.ORDERS s "
+    "JOIN SALES.ORDER_LINES r ON r.T = s.T "
+    "WHERE s.REGION = 'WEST' AND ~SPLIT~"
 )
 
 
 def test_detect_alias_in_join():
-    assert qs.detect_alias(JOIN, "PAY", "CM_FB_SUBMISSION") == "s"
+    assert qs.detect_alias(JOIN, "SALES", "ORDERS") == "s"
 
 
 def test_detect_alias_absent_returns_none():
-    q = "SELECT * FROM PAY.CM_FB_SUBMISSION WHERE ~SPLIT~"
-    assert qs.detect_alias(q, "PAY", "CM_FB_SUBMISSION") is None
+    q = "SELECT * FROM SALES.ORDERS WHERE ~SPLIT~"
+    assert qs.detect_alias(q, "SALES", "ORDERS") is None
 
 
 def test_detect_alias_skips_keyword():
-    q = "SELECT * FROM PAY.T WHERE ~SPLIT~"
-    assert qs.detect_alias(q, "PAY", "T") is None
+    q = "SELECT * FROM SALES.T WHERE ~SPLIT~"
+    assert qs.detect_alias(q, "SALES", "T") is None
 
 
 def test_render_rowid_replaces_split_token():
-    line = qs.render_rowid_line(JOIN, "s", "AAAlo", "AAAhi", "PAY.TGT")
+    line = qs.render_rowid_line(JOIN, "s", "AAAlo", "AAAhi", "SALES.TGT")
     assert "s.ROWID BETWEEN 'AAAlo' AND 'AAAhi'" in line
     assert "~SPLIT~" not in line
-    assert line.endswith("|PAY.TGT")
+    assert line.endswith("|SALES.TGT")
 
 
 def test_render_rowid_append_when_no_token_and_where():
-    q = "SELECT * FROM PAY.T t WHERE t.X = 1"
-    line = qs.render_rowid_line(q, "t", "lo", "hi", "PAY.TGT")
+    q = "SELECT * FROM SALES.T t WHERE t.X = 1"
+    line = qs.render_rowid_line(q, "t", "lo", "hi", "SALES.TGT")
     assert (
         line
-        == "SELECT * FROM PAY.T t WHERE t.X = 1 AND t.ROWID BETWEEN 'lo' AND 'hi'|PAY.TGT"
+        == "SELECT * FROM SALES.T t WHERE t.X = 1 AND t.ROWID BETWEEN 'lo' AND 'hi'|SALES.TGT"
     )
 
 
 def test_render_rowid_append_when_no_token_no_where():
-    q = "SELECT * FROM PAY.T t"
-    line = qs.render_rowid_line(q, "t", "lo", "hi", "PAY.TGT")
-    assert line == "SELECT * FROM PAY.T t WHERE t.ROWID BETWEEN 'lo' AND 'hi'|PAY.TGT"
+    q = "SELECT * FROM SALES.T t"
+    line = qs.render_rowid_line(q, "t", "lo", "hi", "SALES.TGT")
+    assert line == "SELECT * FROM SALES.T t WHERE t.ROWID BETWEEN 'lo' AND 'hi'|SALES.TGT"
 
 
 def test_render_rowid_join_without_alias_raises():
     with pytest.raises(qs.SplitError):
         qs.render_rowid_line(
-            JOIN.replace("~SPLIT~", "1=1"), None, "lo", "hi", "PAY.TGT"
+            JOIN.replace("~SPLIT~", "1=1"), None, "lo", "hi", "SALES.TGT"
         )
 
 
 def test_render_partition_rewrites_from_and_neutralizes_token():
-    line = qs.render_partition_line(JOIN, "PAY", "CM_FB_SUBMISSION", "P1", "PAY.TGT")
-    assert "PAY.CM_FB_SUBMISSION PARTITION (P1) s" in line
+    line = qs.render_partition_line(JOIN, "SALES", "ORDERS", "P1", "SALES.TGT")
+    assert "SALES.ORDERS PARTITION (P1) s" in line
     assert "AND 1=1" in line
     assert "~SPLIT~" not in line
 
 
 def test_render_partition_subpartition_keyword():
-    q = "SELECT * FROM PAY.T t WHERE ~SPLIT~"
-    line = qs.render_partition_line(q, "PAY", "T", "SP3", "PAY.TGT", sub=True)
-    assert "PAY.T SUBPARTITION (SP3) t" in line
+    q = "SELECT * FROM SALES.T t WHERE ~SPLIT~"
+    line = qs.render_partition_line(q, "SALES", "T", "SP3", "SALES.TGT", sub=True)
+    assert "SALES.T SUBPARTITION (SP3) t" in line
 
 
 def test_render_partition_table_absent_raises():
     with pytest.raises(qs.SplitError):
-        qs.render_partition_line("SELECT 1 FROM DUAL", "PAY", "T", "P1", "PAY.TGT")
+        qs.render_partition_line("SELECT 1 FROM DUAL", "SALES", "T", "P1", "SALES.TGT")
 
 
 def test_render_child_table_line_swaps_table_ref():
@@ -77,16 +77,16 @@ def test_render_child_table_line_swaps_table_ref():
 
 def test_render_child_table_line_preserves_alias_and_neutralizes_token():
     line = qs.render_child_table_line(
-        JOIN, "PAY", "CM_FB_SUBMISSION", "PART_3", "PAY.TGT"
+        JOIN, "SALES", "ORDERS", "PART_3", "SALES.TGT"
     )
-    assert "PAY.PART_3 s" in line  # alias 's' preserved; child relation swapped in
+    assert "SALES.PART_3 s" in line  # alias 's' preserved; child relation swapped in
     assert "AND 1=1" in line
     assert "~SPLIT~" not in line
 
 
 def test_render_child_table_line_table_absent_raises():
     with pytest.raises(qs.SplitError):
-        qs.render_child_table_line("SELECT 1 FROM DUAL", "PAY", "T", "T_P1", "PAY.TGT")
+        qs.render_child_table_line("SELECT 1 FROM DUAL", "SALES", "T", "T_P1", "SALES.TGT")
 
 
 def test_coalesce_merges_overlapping():
@@ -118,28 +118,28 @@ def test_format_lines_trailing_newline():
 
 
 def test_inject_predicate_replaces_split_token():
-    q = "SELECT * FROM PAY.T WHERE ~SPLIT~"
+    q = "SELECT * FROM SALES.T WHERE ~SPLIT~"
     result = qs.inject_predicate(q, "X = 1")
-    assert result == "SELECT * FROM PAY.T WHERE X = 1"
+    assert result == "SELECT * FROM SALES.T WHERE X = 1"
     assert "~SPLIT~" not in result
 
 
 def test_inject_predicate_appends_and_when_where_exists():
-    q = "SELECT * FROM PAY.T WHERE Y = 2"
+    q = "SELECT * FROM SALES.T WHERE Y = 2"
     result = qs.inject_predicate(q, "X = 1")
-    assert result == "SELECT * FROM PAY.T WHERE Y = 2 AND X = 1"
+    assert result == "SELECT * FROM SALES.T WHERE Y = 2 AND X = 1"
 
 
 def test_inject_predicate_appends_where_when_no_token_no_where():
-    q = "SELECT * FROM PAY.T"
+    q = "SELECT * FROM SALES.T"
     result = qs.inject_predicate(q, "X = 1")
-    assert result == "SELECT * FROM PAY.T WHERE X = 1"
+    assert result == "SELECT * FROM SALES.T WHERE X = 1"
 
 
 def test_inject_predicate_strips_trailing_semicolon_on_token_path():
-    q = "SELECT * FROM PAY.T WHERE ~SPLIT~;"
+    q = "SELECT * FROM SALES.T WHERE ~SPLIT~;"
     result = qs.inject_predicate(q, "X = 1")
-    assert result == "SELECT * FROM PAY.T WHERE X = 1"
+    assert result == "SELECT * FROM SALES.T WHERE X = 1"
     assert not result.rstrip().endswith(";")
     assert "~SPLIT~" not in result
 
@@ -148,34 +148,34 @@ def test_inject_predicate_strips_trailing_semicolon_on_token_path():
 
 
 def test_render_column_range_line_half_open_default():
-    q = "SELECT * FROM PAY.T t WHERE ~SPLIT~"
-    line = qs.render_column_range_line(q, "X", "10", "20", "PAY.TGT")
+    q = "SELECT * FROM SALES.T t WHERE ~SPLIT~"
+    line = qs.render_column_range_line(q, "X", "10", "20", "SALES.TGT")
     assert "X >= 10 AND X < 20" in line
-    assert line.endswith("|PAY.TGT")
+    assert line.endswith("|SALES.TGT")
     assert "~SPLIT~" not in line
 
 
 def test_render_column_range_line_inclusive_hi():
-    q = "SELECT * FROM PAY.T t WHERE ~SPLIT~"
-    line = qs.render_column_range_line(q, "X", "10", "20", "PAY.TGT", inclusive_hi=True)
+    q = "SELECT * FROM SALES.T t WHERE ~SPLIT~"
+    line = qs.render_column_range_line(q, "X", "10", "20", "SALES.TGT", inclusive_hi=True)
     assert "X >= 10 AND X <= 20" in line
-    assert line.endswith("|PAY.TGT")
+    assert line.endswith("|SALES.TGT")
 
 
 def test_render_column_range_line_values_pass_through_verbatim():
     lo = "TO_DATE('2020-01-01','YYYY-MM-DD')"
     hi = "TO_DATE('2021-01-01','YYYY-MM-DD')"
-    q = "SELECT * FROM PAY.T t WHERE ~SPLIT~"
-    line = qs.render_column_range_line(q, "DT", lo, hi, "PAY.TGT")
+    q = "SELECT * FROM SALES.T t WHERE ~SPLIT~"
+    line = qs.render_column_range_line(q, "DT", lo, hi, "SALES.TGT")
     assert lo in line
     assert hi in line
 
 
 def test_render_column_range_line_alias_qualified_col():
-    q = "SELECT * FROM PAY.T s WHERE ~SPLIT~"
-    line = qs.render_column_range_line(q, "s.CREATED_DT", "100", "200", "PAY.TGT")
+    q = "SELECT * FROM SALES.T s WHERE ~SPLIT~"
+    line = qs.render_column_range_line(q, "s.CREATED_DT", "100", "200", "SALES.TGT")
     assert "s.CREATED_DT >= 100 AND s.CREATED_DT < 200" in line
-    assert line.endswith("|PAY.TGT")
+    assert line.endswith("|SALES.TGT")
 
 
 # --- defensive input validation (validate_identifier / validate_target) ---
@@ -183,7 +183,7 @@ def test_render_column_range_line_alias_qualified_col():
 
 def test_validate_identifier_accepts_bare_ident():
     assert qs.validate_identifier("t", "alias") == "t"
-    assert qs.validate_identifier("CM_CASES$#", "alias") == "CM_CASES$#"
+    assert qs.validate_identifier("ORDERS$#", "alias") == "ORDERS$#"
 
 
 def test_validate_identifier_passes_none_and_empty_through():
@@ -211,10 +211,10 @@ def test_validate_identifier_allows_one_dot_when_qualified():
 
 
 def test_validate_target_accepts_plain_target():
-    assert qs.validate_target("PAY.TGT") == "PAY.TGT"
+    assert qs.validate_target("SALES.TGT") == "SALES.TGT"
 
 
-@pytest.mark.parametrize("bad", ["", "   ", "PAY|X", "|", "a|b|c"])
+@pytest.mark.parametrize("bad", ["", "   ", "SALES|X", "|", "a|b|c"])
 def test_validate_target_rejects_empty_or_piped(bad):
     with pytest.raises(qs.SplitError):
         qs.validate_target(bad)
@@ -224,8 +224,8 @@ def test_validate_target_rejects_empty_or_piped(bad):
 
 
 def test_inject_hint_inserts_after_leading_select():
-    q = "SELECT * FROM PAY.T WHERE x = 1"
-    assert qs.inject_hint(q, "PARALLEL(4)") == "SELECT /*+ PARALLEL(4) */ * FROM PAY.T WHERE x = 1"
+    q = "SELECT * FROM SALES.T WHERE x = 1"
+    assert qs.inject_hint(q, "PARALLEL(4)") == "SELECT /*+ PARALLEL(4) */ * FROM SALES.T WHERE x = 1"
 
 
 def test_inject_hint_preserves_lowercase_keyword():
