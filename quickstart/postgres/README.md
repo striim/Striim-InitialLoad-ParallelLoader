@@ -91,9 +91,9 @@ though: slices on another key could each read the same partition. The panel poin
 `--strategy partition`, which the stage then runs: one slice per month.
 
 ```
-  event_id             column        85.15  Bitmap Heap Scan         good
-  event_ts             column        83.37  Seq Scan (2 of 24 partitions) non-disjoint
-  ctid                 physical      83.06  Tid Range Scan           good
+  event_id             column        66.77  Bitmap Heap Scan         good
+  ctid                 physical      62.99  Tid Range Scan           good
+  event_ts             column        80.63  Seq Scan (2 of 24 partitions) non-disjoint
   partition: table IS partitioned — consider --strategy partition (deterministic, no probe needed).
 -- split --strategy partition (one slice per partition):
   24 slices, e.g.:
