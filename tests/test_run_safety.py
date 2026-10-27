@@ -1,6 +1,9 @@
 # tests/test_run_safety.py
 import json
 import os
+import shutil
+
+import pytest
 
 import run_safety
 
@@ -70,6 +73,9 @@ def test_decide_zero_marker_hash_differ_fresh():
 
 
 import os
+import shutil
+
+import pytest
 
 
 def test_is_pid_alive_self():
@@ -247,3 +253,47 @@ def test_recycled_pid_with_known_differing_start_time_is_taken_over(tmp_path):
 def test_proc_start_time_is_known_for_this_process():
     # /proc on Linux, ps on macOS: either way the running test process has a start time.
     assert run_safety.proc_start_time(os.getpid())
+
+
+needs_ps = pytest.mark.skipif(shutil.which("ps") is None, reason="needs ps")
+
+
+@needs_ps
+def test_ps_start_time_does_not_depend_on_the_callers_time_zone(monkeypatch):
+    monkeypatch.setenv("TZ", "UTC0")
+    utc = run_safety.ps_start_time(os.getpid())
+    monkeypatch.setenv("TZ", "PST8PDT")
+    pacific = run_safety.ps_start_time(os.getpid())
+    assert utc and utc == pacific
+
+
+@needs_ps
+def test_ps_path_lock_holds_when_the_second_caller_has_another_time_zone(
+    tmp_path, monkeypatch
+):
+    # The ps fallback (macOS) is forced here; on Linux /proc would hide the difference.
+    log = str(tmp_path / "logging" / "x.log")
+    monkeypatch.setenv("TZ", "UTC0")
+    ok, _ = run_safety.acquire_lock(log, 7, start_time_fn=run_safety.ps_start_time)
+    assert ok
+    monkeypatch.setenv("TZ", "PST8PDT")
+    ok, msg = run_safety.acquire_lock(
+        log, 7, pid=5555, start_time_fn=run_safety.ps_start_time
+    )
+    assert ok is False and "already locked" in msg
+
+
+def test_live_pid_with_a_start_time_of_another_kind_is_refused(tmp_path):
+    # An older loader wrote local-time ps text; it cannot be compared with the UTC form.
+    log = str(tmp_path / "logging" / "x.log")
+    os.makedirs(os.path.dirname(log))
+    with open(os.path.join(os.path.dirname(log), "run_7.lock"), "w") as f:
+        json.dump({"pid": 4242, "start_time": "Tue Oct 27 08:59:38 2026"}, f)
+    ok, msg = run_safety.acquire_lock(
+        log,
+        7,
+        pid=5555,
+        alive_fn=lambda p: True,
+        start_time_fn=lambda p: run_safety.PS_START_PREFIX + "Tue Oct 27 15:59:38 2026",
+    )
+    assert ok is False and "already locked" in msg

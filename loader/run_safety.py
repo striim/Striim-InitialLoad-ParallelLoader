@@ -100,6 +100,9 @@ def is_pid_alive(pid):
     return True
 
 
+PS_START_PREFIX = "ps-utc:"
+
+
 def proc_start_time(pid):
     """Best-effort process start time: Linux /proc field 22, else `ps -o lstart=`
     (macOS, BSD). None if unavailable."""
@@ -108,14 +111,32 @@ def proc_start_time(pid):
             return f.read().rsplit(")", 1)[-1].split()[19]
     except (OSError, IndexError, ValueError):
         pass
+    return ps_start_time(pid)
+
+
+def ps_start_time(pid):
+    """`ps -o lstart=` with the time zone and locale fixed, so every caller gets the same
+    text for the same process. Prefixed with PS_START_PREFIX. None if unavailable."""
     try:
         out = subprocess.run(
             ["ps", "-o", "lstart=", "-p", str(int(pid))],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=dict(os.environ, TZ="UTC0", LC_ALL="C"),
         ).stdout.strip()
-        return out or None
+        return PS_START_PREFIX + out if out else None
     except (OSError, ValueError, subprocess.SubprocessError):
         return None
+
+
+def _start_time_kind(st):
+    s = str(st)
+    if s.isdigit():
+        return "proc"
+    if s.startswith(PS_START_PREFIX):
+        return "ps"
+    return "other"
 
 
 def acquire_decision(existing_pid, alive, start_time_matches):
@@ -189,9 +210,15 @@ def acquire_lock(
     alive = alive_fn(epid)
     est = existing.get("start_time")
     cur_est = start_time_fn(epid) if alive else None
-    # A live PID is only treated as recycled when both start times are known and differ;
-    # an unknown start time cannot prove that, so the lock is held (fail closed).
-    start_time_matches = est is None or cur_est is None or est == cur_est
+    # A live PID is only treated as recycled when both start times are known, of the same
+    # kind, and differ. An unknown start time, or one written another way (an older
+    # loader's local-time ps text), cannot prove that, so the lock is held (fail closed).
+    start_time_matches = (
+        est is None
+        or cur_est is None
+        or _start_time_kind(est) != _start_time_kind(cur_est)
+        or est == cur_est
+    )
     decision = acquire_decision(epid, alive, start_time_matches)
 
     if decision == "REFUSE":
