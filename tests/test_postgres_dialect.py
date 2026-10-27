@@ -373,7 +373,8 @@ def test_boundaries_physical_from_relpages(d):
     cand = Candidate(kind="physical", key=None, meta={"owner": "public", "table": "t"})
     bnds = d.boundaries(FakeConn(cur), cand, 4)
     assert [b.label for b in bnds] == ["ctid"] * 4
-    assert [(b.lo, b.hi) for b in bnds] == [(0, 25), (25, 50), (50, 75), (75, 100)]
+    last = postgres_boundaries._UNKNOWN_PAGES  # final band is open above the estimate
+    assert [(b.lo, b.hi) for b in bnds] == [(0, 25), (25, 50), (50, 75), (75, last)]
     assert all(b.hi is not None for b in bnds)  # never None (coalesce-safe)
     assert all(b.is_null is False for b in bnds)
 
@@ -391,7 +392,21 @@ def test_boundaries_physical_fewer_pages_than_n_drops_empties(d):
     cur = FakeCursor(fetchone=(2,))
     cand = Candidate(kind="physical", key=None, meta={"owner": "public", "table": "t"})
     bnds = d.boundaries(FakeConn(cur), cand, 4)
-    assert [(b.lo, b.hi) for b in bnds] == [(0, 1), (1, 2)]
+    assert [(b.lo, b.hi) for b in bnds] == [(0, 1), (1, postgres_boundaries._UNKNOWN_PAGES)]
+
+
+def test_boundaries_physical_stale_estimate_still_covers_later_pages(d):
+    # A partitioned parent's estimate comes from its largest ANALYZEd leaf (100 pages);
+    # an unanalyzed leaf can already hold rows on page 150. Exactly one rendered band
+    # must cover that page, so no existing row is left out of every slice.
+    cur = FakeCursor(fetchone=(100,))
+    cand = Candidate(kind="physical", key=None, meta={"owner": "public", "table": "events"})
+    bnds = d.boundaries(FakeConn(cur), cand, 4)
+    page = 150
+    covering = [b for b in bnds if b.lo <= page < b.hi]
+    assert len(covering) == 1
+    pred = d.render_predicate(cand, covering[0], alias="e")
+    assert pred == "e.ctid >= '(75,0)'::tid AND e.ctid < '(4294967295,0)'::tid"
 
 
 # ---------------------------------------------------------------------------

@@ -169,7 +169,8 @@ def relpages(conn, owner, table):
 
     A partitioned parent has no storage of its own, so the largest leaf
     partition's relpages is used: a ctid band is evaluated in each partition's
-    own page space, so bands over [0, max leaf pages) cover every partition.
+    own page space, so this sizes the bands; ctid_page_ranges leaves the last
+    band open above it.
     pg_partition_tree returns no rows for a plain table, so the table's own row is
     included too. Needs PostgreSQL 12+.
     """
@@ -191,8 +192,10 @@ def ctid_page_ranges(conn, owner, table, n):
 
     Returns ``[(page_lo, page_hi), ...]`` with concrete int bounds (never None —
     the shared coalesce step in split_runner does ``max(prev_hi, hi)`` and would
-    choke on None). The final band's hi == relpages; rows written into pages added
-    after the planner estimate are caught by the CDC watermark, not this band.
+    choke on None). ``relpages`` only sizes the bands: it is a planner estimate,
+    and a table (or a leaf partition) can already hold pages beyond it when it
+    was not analyzed since its last inserts. So the final band ends at the
+    max-BlockNumber sentinel, and every existing row falls in exactly one band.
     Empty (lo == hi) bands are dropped when relpages < n.
     """
     pages = relpages(conn, owner, table)
@@ -208,7 +211,10 @@ def ctid_page_ranges(conn, owner, table, n):
         if lo >= hi:
             continue  # empty bucket when pages < n
         ranges.append((lo, hi))
-    return ranges or [(0, pages)]
+    if not ranges:
+        ranges = [(0, pages)]
+    ranges[-1] = (ranges[-1][0], _UNKNOWN_PAGES)  # open above: estimate may be stale
+    return ranges
 
 
 # ---------------------------------------------------------------------------
