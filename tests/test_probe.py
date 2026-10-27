@@ -189,6 +189,12 @@ def test_format_recommendation_parallel_no_gain_verdict():
 
 
 def test_probe_does_not_import_oracledb():
+    # Checked in a fresh interpreter: other test modules may load oracledb into this one.
+    import os
+    import subprocess
     import sys
 
-    assert "oracledb" not in sys.modules
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    code = "import sys, probe; sys.exit(1 if 'oracledb' in sys.modules else 0)"
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([root, os.path.join(root, "loader")]))
+    assert subprocess.run([sys.executable, "-c", code], env=env).returncode == 0
