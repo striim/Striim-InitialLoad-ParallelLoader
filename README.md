@@ -6,6 +6,7 @@ A Python orchestration tool that breaks large database initial loads into parall
 
 ## Table of Contents
 
+- [Quick start](#quick-start)
 1. [Why You Need This Tool](#1-why-you-need-this-tool)
 2. [Key Concepts](#2-key-concepts)
 3. [Prerequisites](#3-prerequisites)
@@ -23,6 +24,45 @@ A Python orchestration tool that breaks large database initial loads into parall
 15. [Source Engine Support](#15-source-engine-support)
 16. [Known Limitations](#16-known-limitations)
 17. [Appendix — Manual ROWID Split](#appendix--manual-rowid-split-oracle_rowsplitsql)
+
+---
+
+## Quick start
+
+There are two ways to start. Both use the same loader; the second points it at your own systems.
+
+### Run it yourself (Docker)
+
+`quickstart/postgres/` runs the whole flow on one machine. It uses
+[striim-testing-framework-utility](https://github.com/striim/striim-testing-framework-utility),
+Striim's test framework, to start Postgres and Striim in Docker and to prove that one slice app
+produces exactly the expected rows before the real load starts. The script then builds sample data,
+runs the probe on four scenarios, splits a query, loads the slices through parallel Striim apps and
+reconciles the row counts.
+
+```bash
+git clone https://github.com/striim/Striim-InitialLoad-ParallelLoader
+git clone https://github.com/striim/striim-testing-framework-utility   # beside it; install per its README
+cd Striim-InitialLoad-ParallelLoader
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+cd quickstart/postgres
+./quickstart.sh all --step
+```
+
+`--step` describes each stage and waits for Enter. You also need Docker and a Striim licence for
+the framework's Docker mode. Once the Docker stack is up, a run takes about 7 minutes at the
+default size. See [quickstart/postgres/README.md](quickstart/postgres/README.md).
+
+### Use your existing infrastructure
+
+1. Follow the [End-to-End Walkthrough](#4-end-to-end-walkthrough) with your own Striim cluster and
+   source database: configure, check the setup, probe, split, run, reconcile.
+2. Before a full load, check the generated slice app on your own Striim with the framework.
+   `quickstart/postgres/striim-test/cases/loader-slice` is a working case to copy: it deploys one
+   slice app built from `admin.SW.tql` and compares the target rows exactly. Point the framework
+   at your server with `STRIIM_URL`, as its README describes.
+3. To try your Striim server with the sample data first, see "Your own Striim" in
+   [quickstart/postgres/README.md](quickstart/postgres/README.md).
 
 ---
 
@@ -85,8 +125,8 @@ A **slice** is one SQL query that reads a disjoint range of rows. The source tab
 `queryfile.txt` is the input to the loader: one line per slice, the SQL query on the left and the target table on the right, separated by `|`:
 
 ```
-SELECT s.* FROM PAY.CM_FB_SUBMISSION s WHERE s.ENTITY_TYPE='CASE' AND s.ROWID BETWEEN 'AAA' AND 'BBB'|PAY.CM_FB_SUBMISSION_TGT
-SELECT s.* FROM PAY.CM_FB_SUBMISSION s WHERE s.ENTITY_TYPE='CASE' AND s.ROWID BETWEEN 'BBB' AND 'CCC'|PAY.CM_FB_SUBMISSION_TGT
+SELECT s.* FROM SALES.ORDERS s WHERE s.REGION='WEST' AND s.ROWID BETWEEN 'AAA' AND 'BBB'|SALES.ORDERS_TGT
+SELECT s.* FROM SALES.ORDERS s WHERE s.REGION='WEST' AND s.ROWID BETWEEN 'BBB' AND 'CCC'|SALES.ORDERS_TGT
 ...
 ```
 
@@ -98,11 +138,11 @@ You write your source query once with a `~SPLIT~` placeholder where the slice pr
 
 ```sql
 -- Your query template:
-SELECT s.* FROM PAY.CM_FB_SUBMISSION s WHERE s.ENTITY_TYPE = 'CASE' AND ~SPLIT~
+SELECT s.* FROM SALES.ORDERS s WHERE s.REGION = 'WEST' AND ~SPLIT~
 
 -- Becomes 64 lines in queryfile.txt:
-... WHERE s.ENTITY_TYPE = 'CASE' AND s.ROWID BETWEEN 'AAA...' AND 'BBB...'
-... WHERE s.ENTITY_TYPE = 'CASE' AND s.ROWID BETWEEN 'BBB...' AND 'CCC...'
+... WHERE s.REGION = 'WEST' AND s.ROWID BETWEEN 'AAA...' AND 'BBB...'
+... WHERE s.REGION = 'WEST' AND s.ROWID BETWEEN 'BBB...' AND 'CCC...'
 ...
 ```
 
@@ -327,7 +367,7 @@ Create a SQL file with your source query. Include a `~SPLIT~` token where the sl
 -- my_query.sql
 SELECT s.COL_A, s.COL_B, s.COL_C
 FROM SCHEMA.SOURCE_TABLE s
-WHERE s.ENTITY_TYPE = 'CASE'
+WHERE s.REGION = 'WEST'
 AND ~SPLIT~
 ```
 
@@ -337,7 +377,7 @@ AND ~SPLIT~
 - Joins, hints, JSON unnesting, subqueries, and projections pass through verbatim
 - **Do not append a `|TARGET` suffix to this template.** The target is supplied separately with `split --target OWNER.TGT`. The `query|target` line format belongs to the *generated* `queryfile.txt` and to pasted batch lines (option 15) — not to the `--query-file` template. A stray `|TARGET` here leaks into the SQL (`… WHERE <pred>|TARGET`) and every slice fails.
 
-See `queryfile.txt.example` for a working example using the seeded `PAY.CM_FB_SUBMISSION` table.
+See `queryfile.txt.example` for a template, and `quickstart/postgres/queries/` for templates that run against the quick start's sample data.
 
 > **Input is validated.** `--table`/`--target` must be `OWNER.TABLE` identifiers, `--alias` and `--column` must be plain identifiers, and numeric flags (`--chunks`, probe tunables) must be positive integers. Bad values are rejected with a clear one-line message (not a stack trace); in the interactive `./manage.sh` wizards you are simply asked to enter the value again.
 
@@ -369,11 +409,11 @@ PROBE RECOMMENDATION
   label          kind       MB/s  access_path               verdict
   ROWID          physical  28.10  TABLE ACCESS BY ROWID R…  good
   CREATED_DT     column    41.20  INDEX RANGE SCAN          good
-  ENTITY_ID      column     3.40  TABLE ACCESS FULL         AMPLIFYING
+  CUSTOMER_ID      column     3.40  TABLE ACCESS FULL         AMPLIFYING
 ----------------------------------------------------------------
   partition: table IS partitioned — consider --strategy partition
   warnings:
-    - AMPLIFYING: candidate 'ENTITY_ID' full-scans PAY.SUBMSN_RESP (join amplification)
+    - AMPLIFYING: candidate 'CUSTOMER_ID' full-scans SALES.ORDER_LINES (join amplification)
 ================================================================
 ```
 
@@ -855,11 +895,11 @@ PROBE RECOMMENDATION
   label          kind       MB/s  access_path               verdict
   ROWID          physical  28.10  TABLE ACCESS BY ROWID R…  good
   CREATED_DT     column    41.20  INDEX RANGE SCAN          good
-  ENTITY_ID      column     3.40  TABLE ACCESS FULL         AMPLIFYING
+  CUSTOMER_ID      column     3.40  TABLE ACCESS FULL         AMPLIFYING
 ----------------------------------------------------------------
   partition: table IS partitioned — consider --strategy partition
   warnings:
-    - AMPLIFYING: candidate 'ENTITY_ID' full-scans PAY.SUBMSN_RESP (join amplification)
+    - AMPLIFYING: candidate 'CUSTOMER_ID' full-scans SALES.ORDER_LINES (join amplification)
 ================================================================
 ```
 
@@ -899,9 +939,9 @@ Write your query with `~SPLIT~` where the predicate belongs and alias the drivin
 
 ```sql
 SELECT s.A, s.B
-FROM PAY.CM_FB_SUBMISSION s
-JOIN PAY.CM_FB_SUBMSN_RESP r ON r.T = s.T
-WHERE s.ENTITY_TYPE = 'CASE'
+FROM SALES.ORDERS s
+JOIN SALES.ORDER_LINES r ON r.T = s.T
+WHERE s.REGION = 'WEST'
 AND ~SPLIT~
 ```
 
@@ -1164,7 +1204,7 @@ DROP NAMESPACE ILA_100_1 CASCADE;
 | Duplicate rows on target after reset + re-run | Target table has no primary key | Add a PK or unique constraint on the natural key before the next run |
 | `DPI-1047` or `python-oracledb` not found | Oracle driver not installed | `pip install python-oracledb`; verify Oracle Instant Client is present if required |
 | Probe returns empty column candidates | No indexed high-NDV columns on driving table | Use `--strategy rowid` or add an appropriate index |
-| `✗ --table must be OWNER.TABLE, got 'CM_CASES'` | `--table`/`--target` given without an owner, or with spaces/typos | Pass the fully-qualified `OWNER.TABLE` (e.g. `PAY.CM_CASES`). In the wizard just re-enter it |
+| `✗ --table must be OWNER.TABLE, got 'ORDERS'` | `--table`/`--target` given without an owner, or with spaces/typos | Pass the fully-qualified `OWNER.TABLE` (e.g. `SALES.ORDERS`). In the wizard just re-enter it |
 | `✗ invalid alias identifier` / `invalid column identifier` | `--alias`/`--column` contains characters outside `A-Z 0-9 _ $ #` (a typo, or an injection attempt) | Use a plain identifier; a column may be `alias.col` |
 | `✗ target must be non-empty and must not contain '\|'` | `--target` was empty or contained the `\|` queryfile delimiter | Supply a plain `OWNER.TABLE`; don't put `\|TARGET` in the `--query-file` template |
 | `argument --chunks: must be a positive integer (>= 1)` | A count/duration flag (`--chunks`, `--sample-rows`, `--target-slice-seconds`, `--max-concurrency`, `--lines`) was `0`, negative, or non-numeric | Pass a positive integer. Prevents the divide-by-zero and degenerate single-slice results a bad value used to cause |
@@ -1260,7 +1300,7 @@ Watermark capture is best-effort: a missing source connection or privilege logs 
 | `admin.SW.tql` | TQL application template; deployed as a new app for each slice |
 | `pvs.tql` | Property variable definitions for Striim; run once per environment |
 | `queryfile.txt` | Generated slice list (one line per slice: `SQL|TARGET_TABLE`) |
-| `queryfile.txt.example` | Working example for the seeded `PAY.CM_FB_SUBMISSION` table |
+| `queryfile.txt.example` | Example `~SPLIT~` query template |
 | `data.py` | State-backend dispatch: routes to TinyDB / BigQuery / PostgreSQL / Oracle |
 | `data_tinydb.py` | TinyDB backend implementation |
 | `data_bq.py` | BigQuery backend implementation |
@@ -1279,13 +1319,13 @@ Watermark capture is best-effort: a missing source connection or privilege logs 
 | `reconcile.py` | `final_verdict`, `reconcile_count_sql`, `is_snapshot_too_old` helpers |
 | `striim_monitor.py` | Best-effort Striim per-app throughput helper for the live board |
 | `make_assorted_queryfile.py` | Reorders `queryfile.txt` for concurrency interleaving |
-| `seed_data.py` | Seeds the example `PAY.CM_FB_SUBMISSION` table for testing |
 | `BQ_TableCreate.sql` | BigQuery orchestration table DDL (must be run manually before first BQ use) |
 | `PG_TableCreate.sql` | PostgreSQL orchestration table DDL (reference; auto-created on first use) |
 | `ORA_TableCreate.sql` | Oracle orchestration table DDL (reference; auto-created on first use) |
 | `oracle_rowsplit.sql` | Manual SQL*Plus ROWID-split helper (legacy; see Appendix) |
 | `requirements.txt` | Python dependencies (`pip install -r requirements.txt`) |
 | `requirements-dev.txt` | Dev and test dependencies |
+| `quickstart/postgres/` | Postgres quick start: sample data, probe scenarios, Striim load, `quickstart.sh` |
 
 ---
 

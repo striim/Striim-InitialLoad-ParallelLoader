@@ -1,0 +1,7 @@
+use admin;
+create or replace propertyvariable SourceConnectionString="jdbc:postgresql://host.docker.internal:5432/split_demo";
+create or replace propertyvariable SourceUsername="postgres";
+create or replace propertyvariable SourcePassword="striim";
+create or replace propertyvariable TargetConnectionString="jdbc:postgresql://host.docker.internal:5432/split_demo_tgt";
+create or replace propertyvariable TargetUsername="postgres";
+create or replace propertyvariable TargetPassword="striim";
