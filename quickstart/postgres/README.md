@@ -38,8 +38,9 @@ cd quickstart/postgres
    [Enter] run   [s] skip   [q] quit:
 ```
 
-`./quickstart.sh all` runs the same stages without stopping. On a laptop with the stack
-already up, it takes about 7 minutes at the default size.
+`./quickstart.sh all` runs the same stages without stopping. With the stack already up and the
+data built, `pvs`, `split`, `load` and `reconcile` took about 7 minutes at `SCALE=1` (5M orders)
+on a laptop.
 
 | Stage | What it does |
 |---|---|
@@ -48,7 +49,7 @@ already up, it takes about 7 minutes at the default size.
 | `build` | Creates `split_demo` (source) and `split_demo_tgt` (target) with `orders`, `order_lines` and monthly-partitioned `events`. |
 | `pvs` | Sets the Striim property variables in `run/pvs.tql`. |
 | `probe` | Runs the four scenarios below. Panels are saved in `run/logging/probe-*.txt`. |
-| `split` | Splits region 7's orders into 6 `order_id` ranges in `run/queryfile.txt`. |
+| `split` | Splits the load query (orders in regions 1 to N; see `LOAD_ROWS`) into `LOAD_CHUNKS` `order_id` ranges plus one `IS NULL` slice, in `run/queryfile.txt`. |
 | `load` | Runs `main.py`: one Striim app per slice, 5 at a time, each created, deployed, started, monitored and dropped. Watch them at http://localhost:9080 (`admin` / `striim`). |
 | `reconcile` | Compares source and target counts and checks for duplicate keys. |
 | `check` | Shows whether the databases exist, their row counts and sizes. |
@@ -84,13 +85,14 @@ flags this before anything runs.
     - AMPLIFYING: candidate 'ctid' full-scans order_lines (join amplification).
 ```
 
-**3. Partitioned `events`.** A range on the partition key reads only the matching partitions. The
-three candidates are within a few percent of each other. The panel also points to
+**3. Partitioned `events`.** A range on the partition key reads only the matching partitions, and
+the panel says how many. A sequential scan of whole partitions is not counted as disjoint access,
+though: slices on another key could each read the same partition. The panel points to
 `--strategy partition`, which the stage then runs: one slice per month.
 
 ```
   event_id             column        85.15  Bitmap Heap Scan         good
-  event_ts             column        83.37  Seq Scan (2 of 24 partitions) good
+  event_ts             column        83.37  Seq Scan (2 of 24 partitions) non-disjoint
   ctid                 physical      83.06  Tid Range Scan           good
   partition: table IS partitioned — consider --strategy partition (deterministic, no probe needed).
 -- split --strategy partition (one slice per partition):
@@ -113,25 +115,41 @@ of the table. That slice decides the run time. This is why the probe ranks keys 
 
 ## The load
 
-`split` writes one line per slice, interleaved with `--assort` so concurrent apps work on different
-parts of the key range:
+The load query takes the orders in regions 1 to N, where N is sized so the query returns about
+`LOAD_ROWS` rows (default 5,000,000, capped at all 10 regions). At the default sizes that is
+every order: 1,000,000 at `SCALE=0.2`, 5,000,000 at `SCALE=1`. `split` cuts it into `LOAD_CHUNKS`
+`order_id` ranges plus one `IS NULL` slice, interleaved with `--assort` so concurrent apps work
+on different parts of the key range. At `SCALE=1`:
 
 ```
+  query: SELECT o.* FROM demo.orders o WHERE o.region_id <= 10 AND ~SPLIT~
   7 slices in run/queryfile.txt:
-  slice  1:     17000 rows   o.region_id = 7 AND o.order_id >= 833334
-  slice  2:     16666 rows   o.region_id = 7 AND o.order_id < 166667
-  slice  3:         0 rows   o.region_id = 7 AND o.order_id IS NULL
+  slice  1:    833334 rows   o.region_id <= 10 AND o.order_id >= 4166667
+  slice  2:    833333 rows   o.region_id <= 10 AND o.order_id < 833334
+  slice  3:         0 rows   o.region_id <= 10 AND o.order_id IS NULL
   ...
 ```
 
-`load` prints the slice counts as they change, then `reconcile` checks the result:
+`load` prints the slice counts as they change, then `reconcile` checks the result. The same run:
 
 ```
-  source rows (load query): 100000
-  target rows:              100000
-  distinct order_id:        100000
+     26s  {'RUNNING': 1, 'NEW': 6}
+     78s  {'RUNNING': 2, 'NEW': 5}
+    ...
+    360s  {'COMPLETED': 7}
+  Run completed: all 7 slices COMPLETED at ...
+load finished in 376s
+
+  source rows (load query): 5000000
+  target rows:              5000000
+  distinct order_id:        5000000
   RECONCILED
 ```
+
+`load` empties the target first only when the loader has no rows for the run. If a previous run
+was interrupted, `load` resumes it and keeps the target rows (completed slices are not run
+again); for a fresh load, run `./quickstart.sh clean` first. It refuses to start while another
+load is running.
 
 Running `load --keep-target` again over a full target adds nothing. The template ignores
 `DUPLICATE_ROW_EXISTS`, and the target has a primary key.
@@ -141,7 +159,8 @@ Running `load --keep-target` again over a full target adds nothing. The template
 | Setting | Default | Effect |
 |---|---|---|
 | `--scale N` | `0.2` | Data size: `1` is 5M orders, 15M order lines and 10M events (about 5 GB). |
-| `LOAD_CHUNKS` | `6` | Slices for the load. Each slice is one Striim app, deployed about 40 s after the previous one, so run time grows with this number. |
+| `LOAD_ROWS` | `5000000` | Rows the load query aims for: it takes regions 1 to N of the orders, N between 1 and 10. |
+| `LOAD_CHUNKS` | `6` | `order_id` ranges for the load, plus one `IS NULL` slice (7 apps by default). Each slice is one Striim app, deployed about 40 s after the previous one, so run time grows with this number. |
 | `SLICE_SECONDS` | `1` | `--target-slice-seconds` passed to the probe (see below). |
 | `PG_CONTAINER` | `slt-postgres` | Postgres container used for `psql`. |
 
@@ -152,13 +171,24 @@ many apps your cluster can run at once.
 
 ## Your own Striim
 
-`run/.env.example` (copied to `run/.env` on first use) holds the loader's settings, and
-`run/pvs.tql` holds the connection strings Striim uses. Both are set to the framework's Docker
-defaults. For your own Striim server, set `STRIIM_URL`, `STRIIM_USER` and `STRIIM_PASS` for the
-framework, `STRIIM_NODE` and `STRIIM_ADMIN_*` in `run/.env`, and in `run/pvs.tql` a Postgres
-address your server can reach. `run/.env.example` also sets
-`STRIIM_SOURCE_PROVIDER_TYPE=Postgres` and `STRIIM_TARGET_PROVIDER_TYPE=Postgres`, the
-`DatabaseProviderType` value Striim accepts (checked on 5.0.6 and 5.4).
+The quick start can use a Striim server you already run, with the sample data still in the Docker
+Postgres on this machine. That server must be able to reach this machine on port 5432.
+
+1. In the shell, before running `quickstart.sh`, export the framework's settings for the `stack`
+   stage: `STRIIM_URL`, `STRIIM_USER`, `STRIIM_PASS`, and `SLT_STRIIM_VIEW_HOST` set to the address
+   your Striim server uses to reach this machine (for a Striim in a Docker container on this
+   machine, `host.docker.internal`). Without it the framework tells Striim to use `localhost`,
+   which is the Striim machine itself. See the framework's
+   [docs/SERVICES.md](https://github.com/striim/striim-testing-framework-utility/blob/main/docs/SERVICES.md)
+   and [docs/SETTINGS.md](https://github.com/striim/striim-testing-framework-utility/blob/main/docs/SETTINGS.md).
+2. In `run/.env` (copied from `run/.env.example` on first use), set the loader's `STRIIM_NODE` to
+   your server's host and port, and `STRIIM_ADMIN_USER` / `STRIIM_ADMIN_PWD`.
+3. In `run/pvs.tql`, replace `host.docker.internal` in both connection strings with the same
+   address as `SLT_STRIIM_VIEW_HOST`. The loader's apps read these property variables.
+
+`run/.env.example` also sets `STRIIM_SOURCE_PROVIDER_TYPE=Postgres` and
+`STRIIM_TARGET_PROVIDER_TYPE=Postgres`, the `DatabaseProviderType` value Striim accepts (checked on
+5.0.6 and 5.4).
 
 The stages that build and check the sample data run `psql` inside the Postgres container
 (`PG_CONTAINER`, default `slt-postgres`). For your own source database, use the loader directly:

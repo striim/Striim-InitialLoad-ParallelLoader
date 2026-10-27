@@ -50,8 +50,8 @@ cd quickstart/postgres
 ```
 
 `--step` describes each stage and waits for Enter. You also need Docker and a Striim licence for
-the framework's Docker mode. Once the Docker stack is up, a run takes about 7 minutes at the
-default size. See [quickstart/postgres/README.md](quickstart/postgres/README.md).
+the framework's Docker mode. With the stack up and the data built, loading 5 million rows took
+about 7 minutes on a laptop. See [quickstart/postgres/README.md](quickstart/postgres/README.md).
 
 ### Use your existing infrastructure
 
@@ -60,7 +60,10 @@ default size. See [quickstart/postgres/README.md](quickstart/postgres/README.md)
 2. Before a full load, check the generated slice app on your own Striim with the framework.
    `quickstart/postgres/striim-test/cases/loader-slice` is a working case to copy: it deploys one
    slice app built from `admin.SW.tql` and compares the target rows exactly. Point the framework
-   at your server with `STRIIM_URL`, as its README describes.
+   at your server with `STRIIM_URL`, `STRIIM_USER` and `STRIIM_PASS`, and set `SLT_STRIIM_VIEW_HOST`
+   to the address your server uses to reach your databases when that differs from this machine's
+   (the framework's
+   [docs/SERVICES.md](https://github.com/striim/striim-testing-framework-utility/blob/main/docs/SERVICES.md)).
 3. To try your Striim server with the sample data first, see "Your own Striim" in
    [quickstart/postgres/README.md](quickstart/postgres/README.md).
 

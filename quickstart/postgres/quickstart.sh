@@ -87,6 +87,27 @@ loader() {
     (cd "$RUN_DIR" && "$LOADER_PY" "$LOADER_HOME/manage.py" "$@")
 }
 
+# True when a live main.py holds the run lock (run/logging/run_<id>.lock, JSON with "pid").
+loader_running() {
+    "$LOADER_PY" - "$RUN_DIR/logging" <<'PY'
+import glob, json, os, sys
+for path in glob.glob(os.path.join(sys.argv[1], "run_*.lock")):
+    try:
+        pid = int(json.load(open(path)).get("pid") or 0)
+    except (OSError, ValueError, TypeError):
+        continue
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        continue
+    except OSError:
+        sys.exit(0)  # exists but not ours to signal: still running
+    if pid > 0:
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
 # Run a ~SPLIT~ query once with the placeholder replaced by TRUE, so every probe
 # starts from a warm cache and scenario order does not change the result.
 warm() {
@@ -209,6 +230,19 @@ stage_load() {
     local keep="${1:-}"
     say "load: one Striim app per slice, 5 at a time (watch http://localhost:9080)"
     [ -s "$RUN_DIR/queryfile.txt" ] && [ -f "$LOAD_QUERY" ] || die "no slices: run ./quickstart.sh split"
+    # Decide before touching the target. A running loader owns the run; a previous run's
+    # rows mean main.py will RESUME it, and completed slices are not replayed, so their
+    # target rows must stay. Only a run with no loader rows starts from an empty target.
+    if loader_running; then
+        die "a load is already running (lock in run/logging/); wait for it to finish"
+    fi
+    local prior
+    prior=$(loader status 2> /dev/null | sed -n 's/^  counts: //p')
+    if [ -n "$prior" ] && [ "$prior" != "(none)" ]; then
+        echo "  previous loader run found ($prior): resuming it and keeping the target rows."
+        echo "  For a fresh load, run ./quickstart.sh clean first."
+        keep=--keep-target
+    fi
     if [ "$keep" != "--keep-target" ]; then
         psql_in "$TGT_DB" -c "TRUNCATE demo.orders"
     fi
