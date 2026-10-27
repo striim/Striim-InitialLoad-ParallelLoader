@@ -22,30 +22,30 @@ from source_dialect import Candidate
 from sqlserver_dialect import SqlServerDialect
 
 # ---------------------------------------------------------------------------
-# A nested JSON-aggregation Oracle query (parent + two child tables).
+# A nested JSON-aggregation Oracle query: orders with their lines, line notes and
+# order attributes.
 # Tables are schema-qualified so miner (not SALES) can resolve them.
 # The query has no outer WHERE clause — inject_predicate will add one.
 # ---------------------------------------------------------------------------
 _COMPLEX_ORACLE_QUERY = """SELECT
+    s.ORDER_ID,
     s.CUSTOMER_ID,
     s.REGION,
-    s.IS_ANONYMOUS,
-    (SELECT JSON_OBJECT(
-                'questions' VALUE JSON_ARRAYAGG(
-                    JSON_OBJECT(
-                        'line_id'   VALUE r.LINE_ID,
-                        'product_id' VALUE r.PRODUCT_ID,
-                        'fb_response'              VALUE r.FB_RESPONSE,
-                        'answers'                  VALUE (
-                            SELECT JSON_ARRAYAGG(
-                                JSON_OBJECT(
-                                    'note_id' VALUE ar.NOTE_ID,
-                                    'note_text'        VALUE ar.NOTE_TEXT
-                                )
+    s.STATUS,
+    (SELECT JSON_ARRAYAGG(
+                JSON_OBJECT(
+                    'line_id'    VALUE r.LINE_ID,
+                    'product_id' VALUE r.PRODUCT_ID,
+                    'quantity'   VALUE r.QUANTITY,
+                    'notes'      VALUE (
+                        SELECT JSON_ARRAYAGG(
+                            JSON_OBJECT(
+                                'note_id'   VALUE ar.NOTE_ID,
+                                'note_text' VALUE ar.NOTE_TEXT
                             )
-                            FROM SALES.LINE_NOTES ar
-                            WHERE ar.LINE_ID = r.LINE_ID
                         )
+                        FROM SALES.LINE_NOTES ar
+                        WHERE ar.LINE_ID = r.LINE_ID
                     )
                 )
             )
@@ -54,10 +54,9 @@ _COMPLEX_ORACLE_QUERY = """SELECT
     ) AS LINES_JSON,
     (SELECT JSON_ARRAYAGG(
                 JSON_OBJECT(
-                    'attr_id'  VALUE m.ATTR_ID,
-                    'attr_key'     VALUE m.ATTR_KEY,
-                    'map_value'                  VALUE m.MAP_VALUE,
-                    'store_name'                VALUE m.STORE_NAME
+                    'attr_key'   VALUE m.ATTR_KEY,
+                    'attr_value' VALUE m.ATTR_VALUE,
+                    'store_name' VALUE m.STORE_NAME
                 )
             )
      FROM SALES.ORDER_ATTRS m
