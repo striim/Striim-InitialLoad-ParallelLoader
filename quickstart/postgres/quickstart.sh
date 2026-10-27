@@ -87,18 +87,29 @@ loader() {
     (cd "$RUN_DIR" && "$LOADER_PY" "$LOADER_HOME/manage.py" "$@")
 }
 
-# Exit 1 when a live loader holds this run's lock. Uses the loader's own lock logic
-# (pid plus process start time), so a stale lock left by a crash does not count.
-loader_lock_free() {
-    (cd "$RUN_DIR" && "$LOADER_PY" - "$LOADER_HOME" <<'PY'
-import os, sys
+# Run a command while holding this run's lock, so no loader can start until it exits.
+# Exits 75 without running it when a live loader holds the lock. Uses the loader's own
+# lock logic (pid plus process start time), so a stale lock left by a crash does not count.
+with_run_lock() {
+    (cd "$RUN_DIR" && "$LOADER_PY" - "$LOADER_HOME" "$@" <<'PY'
+import os, subprocess, sys
 sys.path[:0] = [sys.argv[1], os.path.join(sys.argv[1], "loader")]
 import config, run_safety
 ok, msg = run_safety.acquire_lock(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
 if not ok:
     print(msg, file=sys.stderr)
-    sys.exit(1)
-run_safety.release_lock(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
+    sys.exit(75)
+try:
+    child = subprocess.Popen(sys.argv[2:])
+    while True:
+        try:
+            rc = child.wait()
+            break
+        except KeyboardInterrupt:
+            pass  # the child got the same Ctrl-C; hold the lock until it has exited
+finally:
+    run_safety.release_lock(config.LOG_OUTPUT_PATH, config.UNIQUE_RUN_ID)
+sys.exit(rc)
 PY
     )
 }
@@ -229,12 +240,20 @@ stage_load() {
     local t0=$SECONDS log="$RUN_DIR/logging/load.log" pid rc last="" now
     mkdir -p "$RUN_DIR/logging"
     echo "  orchestrator output: run/logging/load.log"
-    pid=""
+    pid="" stop=0
     # A background job ignores Ctrl-C in a script, so pass it on: stop the loader too.
-    trap 'kill "$pid" 2> /dev/null; wait "$pid" 2> /dev/null || true
-          die "load stopped. Run ./quickstart.sh load to resume it, or clean for a fresh load"' INT TERM
+    # A signal that lands before $! is known is acted on right after it is.
+    stop_load() {
+        stop=1
+        [ -n "$pid" ] || return 0
+        kill "$pid" 2> /dev/null || true
+        wait "$pid" 2> /dev/null || true
+        die "load stopped. Run ./quickstart.sh load to resume it, or clean for a fresh load"
+    }
+    trap stop_load INT TERM
     (cd "$RUN_DIR" && exec "$LOADER_PY" "$LOADER_HOME/main.py") > "$log" 2>&1 &
     pid=$!
+    [ "$stop" = 0 ] || stop_load
     # Print the loader's slice counts each time they change.
     while kill -0 "$pid" 2> /dev/null; do
         now=$(loader status 2> /dev/null | sed -n 's/^  counts: //p')
@@ -269,10 +288,17 @@ stage_reconcile() {
 }
 
 # Retire the loader run and remove its Striim apps; --all also drops both databases.
+# The reset runs as a child of with_run_lock, so a load started meanwhile is refused.
 stage_clean() {
-    local all="${1:-}"
     say "clean: retire loader run, remove ILA_ apps, empty the target"
-    loader_lock_free || die "a load is running; stop it (Ctrl-C in its terminal) before clean"
+    local rc=0
+    with_run_lock bash "$QS_DIR/quickstart.sh" _reset "${1:-}" || rc=$?
+    [ "$rc" != 75 ] || die "a load is running; stop it (Ctrl-C in its terminal) before clean"
+    return "$rc"
+}
+
+stage_reset() {
+    local all="${1:-}"
     loader clear --with-striim-cleanup --yes || true
     rm -f "$RUN_DIR/queryfile.txt" "$LOAD_QUERY"
     if [ "$all" = "--all" ]; then
@@ -434,6 +460,7 @@ main() {
         load) stage_load "${args[@]:-}" ;;
         reconcile) stage_reconcile ;;
         clean) stage_clean "${args[@]:-}" ;;
+        _reset) stage_reset "${args[@]:-}" ;;  # internal: clean's body, under the run lock
         -h|--help|help) usage ;;
         *) usage; exit 2 ;;
     esac
