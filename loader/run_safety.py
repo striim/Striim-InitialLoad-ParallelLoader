@@ -8,6 +8,7 @@ No heavy/optional deps.
 import hashlib
 import json
 import os
+import subprocess
 from datetime import datetime, timezone
 
 
@@ -100,11 +101,20 @@ def is_pid_alive(pid):
 
 
 def proc_start_time(pid):
-    """Best-effort process start-time (Linux /proc field 22). None if unavailable."""
+    """Best-effort process start time: Linux /proc field 22, else `ps -o lstart=`
+    (macOS, BSD). None if unavailable."""
     try:
         with open(f"/proc/{int(pid)}/stat") as f:
             return f.read().rsplit(")", 1)[-1].split()[19]
     except (OSError, IndexError, ValueError):
+        pass
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(int(pid))],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        return out or None
+    except (OSError, ValueError, subprocess.SubprocessError):
         return None
 
 
@@ -179,7 +189,9 @@ def acquire_lock(
     alive = alive_fn(epid)
     est = existing.get("start_time")
     cur_est = start_time_fn(epid) if alive else None
-    start_time_matches = est is not None and est == cur_est
+    # A live PID is only treated as recycled when both start times are known and differ;
+    # an unknown start time cannot prove that, so the lock is held (fail closed).
+    start_time_matches = est is None or cur_est is None or est == cur_est
     decision = acquire_decision(epid, alive, start_time_matches)
 
     if decision == "REFUSE":

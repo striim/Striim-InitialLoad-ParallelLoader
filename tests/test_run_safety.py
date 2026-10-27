@@ -1,4 +1,7 @@
 # tests/test_run_safety.py
+import json
+import os
+
 import run_safety
 
 
@@ -215,3 +218,32 @@ def test_new2_excl_create_only_one_winner(tmp_path):
         results.count("WIN") == 1
     ), f"exactly one O_EXCL winner expected; got {results}"
     assert results.count("LOSE") == 1
+
+
+def test_live_pid_with_unknown_start_time_is_refused(tmp_path):
+    # Without a readable start time (no /proc and no ps) a live PID cannot be shown to
+    # be recycled, so a second loader must not take over the lock.
+    log = str(tmp_path / "logging" / "x.log")
+    os.makedirs(os.path.dirname(log))
+    with open(os.path.join(os.path.dirname(log), "run_7.lock"), "w") as f:
+        json.dump({"pid": 4242, "start_time": None}, f)
+    ok, msg = run_safety.acquire_lock(
+        log, 7, pid=5555, alive_fn=lambda p: True, start_time_fn=lambda p: None
+    )
+    assert ok is False and "already locked" in msg
+
+
+def test_recycled_pid_with_known_differing_start_time_is_taken_over(tmp_path):
+    log = str(tmp_path / "logging" / "x.log")
+    os.makedirs(os.path.dirname(log))
+    with open(os.path.join(os.path.dirname(log), "run_7.lock"), "w") as f:
+        json.dump({"pid": 4242, "start_time": "old"}, f)
+    ok, _ = run_safety.acquire_lock(
+        log, 7, pid=5555, alive_fn=lambda p: True, start_time_fn=lambda p: "new"
+    )
+    assert ok is True
+
+
+def test_proc_start_time_is_known_for_this_process():
+    # /proc on Linux, ps on macOS: either way the running test process has a start time.
+    assert run_safety.proc_start_time(os.getpid())
